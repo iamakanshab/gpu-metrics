@@ -1,0 +1,14 @@
+# grafana-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: metrics
+spec:
+  type: NodePort
+  selector:
+    app: grafana
+  ports:
+    - port: 3000
+      targetPort: 3000
+      nodePort: 30000  # You can specify a port between 30000-32767
