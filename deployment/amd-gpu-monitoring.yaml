@@ -1,0 +1,230 @@
+# prometheus-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: metrics
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    scrape_configs:
+      - job_name: 'kubernetes-nodes'
+        kubernetes_sd_configs:
+          - role: node
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_node_name]
+            target_label: node
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            regex: 'amd_gpu_.+'
+            action: keep
+      - job_name: 'rocm-smi-exporter'
+        static_configs:
+          - targets: ['rocm-smi-exporter:9400']
+
+---
+# rocm-smi-exporter.yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: rocm-smi-exporter
+  namespace: metrics
+spec:
+  selector:
+    matchLabels:
+      app: rocm-smi-exporter
+  template:
+    metadata:
+      labels:
+        app: rocm-smi-exporter
+    spec:
+      containers:
+      - name: rocm-smi-exporter
+        image: k8s.gcr.io/prometheus-adapter/prometheus-adapter:v0.9.1
+        args:
+        - --secure-port=6443
+        - --cert-dir=/tmp
+        command:
+        - /bin/sh
+        - -c
+        - |
+          while true; do
+            for gpu in $(rocm-smi --showhw | grep "GPU\[" | cut -d'[' -f2 | cut -d']' -f1); do
+              # GPU Utilization
+              utilization=$(rocm-smi -d $gpu --showuse | grep "GPU use" | awk '{print $4}')
+              echo "amd_gpu_utilization{gpu=\"$gpu\"} $utilization"
+              
+              # Memory Usage
+              memory=$(rocm-smi -d $gpu --showmemuse | grep "GPU memory use" | awk '{print $5}')
+              echo "amd_gpu_memory_used_bytes{gpu=\"$gpu\"} $memory"
+              
+              # Temperature
+              temp=$(rocm-smi -d $gpu --showtemp | grep "Temperature" | awk '{print $2}')
+              echo "amd_gpu_temperature_celsius{gpu=\"$gpu\"} $temp"
+              
+              # Power Usage
+              power=$(rocm-smi -d $gpu --showpower | grep "Average Graphics Package Power" | awk '{print $6}')
+              echo "amd_gpu_power_watts{gpu=\"$gpu\"} $power"
+            done
+            sleep 15
+          done
+        volumeMounts:
+        - name: sys
+          mountPath: /sys
+        - name: dev
+          mountPath: /dev
+        securityContext:
+          privileged: true
+      volumes:
+      - name: sys
+        hostPath:
+          path: /sys
+      - name: dev
+        hostPath:
+          path: /dev
+
+---
+# grafana-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+      - name: grafana
+        image: grafana/grafana:10.0.0
+        ports:
+          - containerPort: 3000
+        env:
+          - name: GF_SECURITY_ADMIN_PASSWORD
+            value: "admin123"  # Change this in production
+        volumeMounts:
+          - name: grafana-storage
+            mountPath: /var/lib/grafana
+          - name: grafana-datasources
+            mountPath: /etc/grafana/provisioning/datasources
+          - name: grafana-dashboards
+            mountPath: /etc/grafana/provisioning/dashboards
+      volumes:
+        - name: grafana-storage
+          emptyDir: {}
+        - name: grafana-datasources
+          configMap:
+            name: grafana-datasources
+        - name: grafana-dashboards
+          configMap:
+            name: grafana-dashboards
+
+---
+# grafana-dashboard-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: metrics
+data:
+  amd-dashboard.json: |
+    {
+      "annotations": {
+        "list": []
+      },
+      "editable": true,
+      "panels": [
+        {
+          "title": "GPU Utilization",
+          "type": "graph",
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "expr": "amd_gpu_utilization",
+              "legendFormat": "GPU {{gpu}}"
+            }
+          ]
+        },
+        {
+          "title": "GPU Memory Usage",
+          "type": "graph",
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "expr": "amd_gpu_memory_used_bytes",
+              "legendFormat": "GPU {{gpu}}"
+            }
+          ]
+        },
+        {
+          "title": "GPU Temperature",
+          "type": "graph",
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "expr": "amd_gpu_temperature_celsius",
+              "legendFormat": "GPU {{gpu}}"
+            }
+          ]
+        },
+        {
+          "title": "GPU Power Usage",
+          "type": "graph",
+          "datasource": "Prometheus",
+          "targets": [
+            {
+              "expr": "amd_gpu_power_watts",
+              "legendFormat": "GPU {{gpu}}"
+            }
+          ]
+        }
+      ]
+    }
+
+---
+# services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: metrics
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - port: 9090
+      targetPort: 9090
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rocm-smi-exporter
+  namespace: metrics
+spec:
+  selector:
+    app: rocm-smi-exporter
+  ports:
+    - port: 9400
+      targetPort: 9400
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: metrics
+spec:
+  selector:
+    app: grafana
+  ports:
+    - port: 3000
+      targetPort: 3000
+  type: LoadBalancer
