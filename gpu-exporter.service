@@ -1,13 +1,16 @@
 [Unit]
-Description=Kubernetes GPU Metrics Exporter
+Description=Kubernetes AMD GPU Metrics Exporter
 After=network.target
+Wants=network.target
 
 [Service]
 Type=simple
 User=root
-Environment=KUBECONFIG=/path/to/your/kubeconfig
+Environment=KUBECONFIG=/etc/kubernetes/kubeconfig
 Environment=EXPORTER_PORT=9400
-ExecStart=/path/to/gpu-exporter-env/bin/python /path/to/k8s-gpu-exporter.py
+Environment=COLLECTION_INTERVAL=15
+WorkingDirectory=/opt/gpu-exporter
+ExecStart=/usr/bin/python3 /opt/gpu-exporter/k8s-gpu-exporter.py
 Restart=always
 RestartSec=10
 
