@@ -3,70 +3,144 @@
 ## Overview
 This solution provides comprehensive GPU monitoring for AMD GPUs across multiple Kubernetes clusters (OCI and bare metal) with metrics visualization in AWS-hosted Grafana. It supports namespace-level segregation for tenant-specific monitoring and utilization tracking.
 
-@@
+## Directory Structure
+```
 gpu-monitoring/
-├── README.md
-├── LICENSE
-├── .gitignore
-├── examples/
-│   ├── grafana-dashboards/
+├── README.md                 # Project overview and main documentation
+├── LICENSE                   # Project license information
+├── .gitignore               # Git ignore patterns
+├── examples/                 # Example configurations and queries
+│   ├── grafana-dashboards/  # Sample Grafana dashboard templates
 │   │   ├── namespace-overview.json
 │   │   ├── cluster-overview.json
 │   │   └── alerts-dashboard.json
-│   └── queries/
+│   └── queries/             # Example PromQL queries
 │       └── example-queries.md
-├── deploy/
-│   ├── base/
+├── deploy/                  # Deployment configurations
+│   ├── base/               # Base Kubernetes manifests
 │   │   ├── kustomization.yaml
 │   │   ├── namespace.yaml
-│   │   ├── rocm-exporter/
+│   │   ├── rocm-exporter/  # ROCm exporter configurations
 │   │   │   ├── daemonset.yaml
 │   │   │   ├── service.yaml
 │   │   │   ├── serviceaccount.yaml
 │   │   │   ├── configmap.yaml
 │   │   │   └── rbac.yaml
-│   │   └── prometheus/
+│   │   └── prometheus/     # Prometheus configurations
 │   │       ├── prometheus-config.yaml
 │   │       ├── remote-write-secret.yaml
 │   │       └── recording-rules.yaml
-│   ├── overlays/
-│   │   ├── oci/
+│   ├── overlays/          # Environment-specific overlays
+│   │   ├── oci/          # Oracle Cloud Infrastructure specific
 │   │   │   ├── kustomization.yaml
 │   │   │   └── cluster-specific-values.yaml
-│   │   └── baremetal/
+│   │   └── baremetal/    # Bare metal specific
 │   │       ├── kustomization.yaml
 │   │       └── cluster-specific-values.yaml
-│   └── network/
+│   └── network/          # Network configurations
 │       ├── aws-security-groups/
 │       │   └── grafana-inbound.tf
 │       ├── oci-security-lists/
 │       │   └── prometheus-outbound.tf
 │       └── vpn/
 │           └── site-to-site-vpn.tf
-├── scripts/
-│   ├── install.sh
-│   ├── uninstall.sh
+├── scripts/             # Utility scripts
+│   ├── install.sh      # Installation script
+│   ├── uninstall.sh    # Uninstallation script
 │   ├── update-grafana-key.sh
 │   └── verify-installation.sh
-├── docs/
+├── docs/               # Documentation
 │   ├── architecture.md
 │   ├── installation.md
 │   ├── configuration.md
 │   ├── networking.md
 │   ├── security.md
 │   ├── troubleshooting.md
-│   └── images/
+│   └── images/        # Documentation images
 │       ├── architecture-diagram.png
 │       └── network-flow.png
-└── monitoring/
-├── alerts/
-│   ├── gpu-utilization.yaml
-│   └── memory-usage.yaml
-├── dashboards/
-│   ├── namespace-metrics.json
-│   └── cluster-overview.json
-└── recording-rules/
-└── gpu-metrics.yaml
+└── monitoring/        # Monitoring configurations
+    ├── alerts/       # Prometheus alert rules
+    │   ├── gpu-utilization.yaml
+    │   └── memory-usage.yaml
+    ├── dashboards/   # Grafana dashboard configurations
+    │   ├── namespace-metrics.json
+    │   └── cluster-overview.json
+    └── recording-rules/
+        └── gpu-metrics.yaml
+```
+
+## Directory Overview
+
+### `/examples`
+Contains example configurations and queries to help users get started:
+- `grafana-dashboards/`: Pre-configured Grafana dashboard templates
+- `queries/`: Example PromQL queries for common monitoring scenarios
+
+### `/deploy`
+Deployment configurations and manifests:
+- `base/`: Base Kubernetes configurations using Kustomize
+- `overlays/`: Environment-specific configurations for OCI and bare metal
+- `network/`: Network configurations for different cloud providers
+
+### `/scripts`
+Utility scripts for managing the monitoring stack:
+- `install.sh`: Installation script for the monitoring stack
+- `uninstall.sh`: Clean removal of the monitoring stack
+- `update-grafana-key.sh`: Script to update Grafana API keys
+- `verify-installation.sh`: Verification of the installation
+
+### `/docs`
+Comprehensive documentation:
+- Architecture details
+- Installation guides
+- Configuration instructions
+- Network setup
+- Security considerations
+- Troubleshooting guides
+- Visual diagrams and flowcharts
+
+### `/monitoring`
+Monitoring configurations:
+- `alerts/`: Prometheus alerting rules
+- `dashboards/`: Grafana dashboard configurations
+- `recording-rules/`: Prometheus recording rules
+
+## Quick Start
+
+1. Clone the repository:
+```bash
+git clone <repository-url>
+cd gpu-monitoring
+```
+
+2. Configure your environment:
+```bash
+cp deploy/overlays/oci/cluster-specific-values.yaml.example deploy/overlays/oci/cluster-specific-values.yaml
+# Edit the values file with your configuration
+```
+
+3. Run the installation script:
+```bash
+./scripts/install.sh
+```
+
+4. Verify the installation:
+```bash
+./scripts/verify-installation.sh
+```
+
+## Contributing
+
+1. Fork the repository
+2. Create your feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a new Pull Request
+
+## License
+
+This project is licensed under the [LICENSE](LICENSE) - see the LICENSE file for details.
 
 ## Architecture
 ```
