@@ -3,6 +3,71 @@
 ## Overview
 This solution provides comprehensive GPU monitoring for AMD GPUs across multiple Kubernetes clusters (OCI and bare metal) with metrics visualization in AWS-hosted Grafana. It supports namespace-level segregation for tenant-specific monitoring and utilization tracking.
 
+@@
+gpu-monitoring/
+├── README.md
+├── LICENSE
+├── .gitignore
+├── examples/
+│   ├── grafana-dashboards/
+│   │   ├── namespace-overview.json
+│   │   ├── cluster-overview.json
+│   │   └── alerts-dashboard.json
+│   └── queries/
+│       └── example-queries.md
+├── deploy/
+│   ├── base/
+│   │   ├── kustomization.yaml
+│   │   ├── namespace.yaml
+│   │   ├── rocm-exporter/
+│   │   │   ├── daemonset.yaml
+│   │   │   ├── service.yaml
+│   │   │   ├── serviceaccount.yaml
+│   │   │   ├── configmap.yaml
+│   │   │   └── rbac.yaml
+│   │   └── prometheus/
+│   │       ├── prometheus-config.yaml
+│   │       ├── remote-write-secret.yaml
+│   │       └── recording-rules.yaml
+│   ├── overlays/
+│   │   ├── oci/
+│   │   │   ├── kustomization.yaml
+│   │   │   └── cluster-specific-values.yaml
+│   │   └── baremetal/
+│   │       ├── kustomization.yaml
+│   │       └── cluster-specific-values.yaml
+│   └── network/
+│       ├── aws-security-groups/
+│       │   └── grafana-inbound.tf
+│       ├── oci-security-lists/
+│       │   └── prometheus-outbound.tf
+│       └── vpn/
+│           └── site-to-site-vpn.tf
+├── scripts/
+│   ├── install.sh
+│   ├── uninstall.sh
+│   ├── update-grafana-key.sh
+│   └── verify-installation.sh
+├── docs/
+│   ├── architecture.md
+│   ├── installation.md
+│   ├── configuration.md
+│   ├── networking.md
+│   ├── security.md
+│   ├── troubleshooting.md
+│   └── images/
+│       ├── architecture-diagram.png
+│       └── network-flow.png
+└── monitoring/
+├── alerts/
+│   ├── gpu-utilization.yaml
+│   └── memory-usage.yaml
+├── dashboards/
+│   ├── namespace-metrics.json
+│   └── cluster-overview.json
+└── recording-rules/
+└── gpu-metrics.yaml
+
 ## Architecture
 ```
 ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
