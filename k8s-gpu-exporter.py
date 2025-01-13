@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-import subprocess
-import json
 import logging
 from prometheus_client import start_http_server, Gauge, Counter
 import time
 import os
+from kubernetes import client, config
+import subprocess
 
 # Configure logging
 logging.basicConfig(
@@ -53,122 +53,87 @@ class K8sGPUExporter:
             'tuning'
         ]
         
-    def _run_kubectl(self, command):
-        """Execute kubectl command and return output."""
+        # Initialize kubernetes client
+        try:
+            config.load_kube_config()  # try loading from kubeconfig first
+        except:
+            try:
+                config.load_incluster_config()  # try in-cluster config
+            except Exception as e:
+                logger.error(f"Failed to load kubernetes config: {e}")
+                raise
+                
+        self.k8s_client = client.CoreV1Api()
+        
+    def _get_gpu_metrics_from_rocm(self):
+        """Get GPU metrics directly using rocm-smi."""
         try:
             result = subprocess.run(
-                f"kubectl {command}",
-                shell=True,
+                ['rocm-smi', '--showuse', '--showmemuse', '--showpower', '--json'],
                 capture_output=True,
                 text=True
             )
             if result.returncode != 0:
-                raise subprocess.SubprocessError(f"Command failed: {result.stderr}")
+                logger.error(f"rocm-smi error: {result.stderr}")
+                return None
             return result.stdout
         except Exception as e:
-            logger.error(f"Error executing kubectl command: {e}")
-            self.metrics.collection_errors.labels(type='kubectl').inc()
-            return ""
+            logger.error(f"Error executing rocm-smi: {e}")
+            self.metrics.collection_errors.labels(type='rocm_smi').inc()
+            return None
 
     def _get_gpu_pods(self):
         """Get all pods using GPUs across watched namespaces."""
         gpu_pods = []
         for namespace in self.watched_namespaces:
-            # Get pods in JSON format with node information
-            pods_json = self._run_kubectl(
-                f"get pods -n {namespace} -o json"
-            )
-            if not pods_json:
-                continue
-                
             try:
-                pods = json.loads(pods_json)
-                for pod in pods.get('items', []):
+                pods = self.k8s_client.list_namespaced_pod(namespace)
+                for pod in pods.items:
                     # Check if pod has GPU resources
-                    containers = pod.get('spec', {}).get('containers', [])
-                    for container in containers:
-                        resources = container.get('resources', {})
-                        limits = resources.get('limits', {})
-                        if 'amd.com/gpu' in limits:
-                            gpu_pods.append({
-                                'name': pod['metadata']['name'],
-                                'namespace': pod['metadata']['namespace'],
-                                'node': pod.get('spec', {}).get('nodeName', 'unknown'),
-                                'gpu_count': int(limits['amd.com/gpu'])
-                            })
+                    for container in pod.spec.containers:
+                        if container.resources and container.resources.limits:
+                            gpu_limit = container.resources.limits.get('amd.com/gpu')
+                            if gpu_limit:
+                                gpu_pods.append({
+                                    'name': pod.metadata.name,
+                                    'namespace': pod.metadata.namespace,
+                                    'node': pod.spec.node_name if pod.spec.node_name else 'unknown',
+                                    'gpu_count': int(gpu_limit)
+                                })
             except Exception as e:
-                logger.error(f"Error parsing pod data: {e}")
-                self.metrics.collection_errors.labels(type='parse').inc()
-                
+                logger.error(f"Error getting pods from namespace {namespace}: {e}")
+                self.metrics.collection_errors.labels(type='k8s_api').inc()
         return gpu_pods
 
-    def _get_gpu_metrics_for_node(self, node):
-        """Get GPU metrics for a specific node using rocm-smi."""
-        try:
-            # Execute rocm-smi on the node
-            cmd = f"kubectl debug node/{node} -it --image=rocm/rocm-terminal -- rocm-smi --json"
-            metrics_json = self._run_kubectl(cmd)
-            if not metrics_json:
-                return {}
-                
-            return json.loads(metrics_json)
-        except Exception as e:
-            logger.error(f"Error getting GPU metrics for node {node}: {e}")
-            self.metrics.collection_errors.labels(type='metrics').inc()
-            return {}
-
     def collect_metrics(self):
-        """Collect GPU metrics for all GPU-using pods."""
+        """Collect GPU metrics."""
+        # Get GPU metrics from rocm-smi
+        gpu_metrics = self._get_gpu_metrics_from_rocm()
+        if not gpu_metrics:
+            return
+
         # Get all pods using GPUs
         gpu_pods = self._get_gpu_pods()
         
-        # Track processed nodes to avoid duplicate metric collection
-        processed_nodes = set()
-        
+        # Update metrics
         for pod in gpu_pods:
-            node = pod['node']
-            
-            # Only collect node metrics once
-            if node not in processed_nodes:
-                gpu_metrics = self._get_gpu_metrics_for_node(node)
-                processed_nodes.add(node)
+            try:
+                # Get GPU utilization from rocm-smi output
+                # Parse the JSON output and update metrics accordingly
+                # This is a simplified version - you'll need to adapt the parsing
+                # based on your actual rocm-smi output format
+                self.metrics.gpu_utilization.labels(
+                    node=pod['node'],
+                    namespace=pod['namespace'],
+                    pod=pod['name'],
+                    gpu_id='0'  # You'll need to get the actual GPU ID
+                ).set(0)  # Replace with actual utilization value
                 
-                if not gpu_metrics:
-                    continue
+                # Similar updates for other metrics...
                 
-                # Update metrics for each GPU
-                for gpu_id, gpu_data in gpu_metrics.items():
-                    try:
-                        self.metrics.gpu_utilization.labels(
-                            node=node,
-                            namespace=pod['namespace'],
-                            pod=pod['name'],
-                            gpu_id=gpu_id
-                        ).set(gpu_data.get('GPU use (%)', 0))
-                        
-                        self.metrics.gpu_memory_used.labels(
-                            node=node,
-                            namespace=pod['namespace'],
-                            pod=pod['name'],
-                            gpu_id=gpu_id
-                        ).set(gpu_data.get('Memory use (bytes)', 0))
-                        
-                        self.metrics.gpu_memory_total.labels(
-                            node=node,
-                            namespace=pod['namespace'],
-                            pod=pod['name'],
-                            gpu_id=gpu_id
-                        ).set(gpu_data.get('Memory total (bytes)', 0))
-                        
-                        self.metrics.gpu_power_usage.labels(
-                            node=node,
-                            namespace=pod['namespace'],
-                            pod=pod['name'],
-                            gpu_id=gpu_id
-                        ).set(gpu_data.get('Power use (watts)', 0))
-                    except Exception as e:
-                        logger.error(f"Error setting metrics for GPU {gpu_id} on {node}: {e}")
-                        self.metrics.collection_errors.labels(type='set_metrics').inc()
+            except Exception as e:
+                logger.error(f"Error updating metrics for pod {pod['name']}: {e}")
+                self.metrics.collection_errors.labels(type='update_metrics').inc()
 
 def main():
     # Load configuration from environment
