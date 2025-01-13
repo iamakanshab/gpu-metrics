@@ -10,7 +10,7 @@ import traceback
 
 # Configure logging
 logging.basicConfig(
-    level=logging.DEBUG,  # Changed to DEBUG for more verbose output
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout)
@@ -20,90 +20,76 @@ logger = logging.getLogger('k8s-gpu-exporter')
 
 class K8sGPUMetrics:
     def __init__(self):
-        try:
-            logger.debug("Initializing metrics...")
-            self.gpu_utilization = Gauge(
-                'k8s_gpu_utilization', 
-                'GPU utilization percentage',
-                ['node', 'namespace', 'pod', 'gpu_id']
-            )
-            self.gpu_memory_used = Gauge(
-                'k8s_gpu_memory_used',
-                'GPU memory used in bytes',
-                ['node', 'namespace', 'pod', 'gpu_id']
-            )
-            self.gpu_memory_total = Gauge(
-                'k8s_gpu_memory_total',
-                'Total GPU memory in bytes',
-                ['node', 'namespace', 'pod', 'gpu_id']
-            )
-            self.gpu_power_usage = Gauge(
-                'k8s_gpu_power_usage',
-                'GPU power usage in watts',
-                ['node', 'namespace', 'pod', 'gpu_id']
-            )
-            self.collection_errors = Counter(
-                'k8s_gpu_collector_errors_total',
-                'Total number of collection errors',
-                ['type']
-            )
-            logger.debug("Metrics initialized successfully")
-        except Exception as e:
-            logger.error(f"Error initializing metrics: {e}")
-            logger.error(traceback.format_exc())
-            raise
+        logger.debug("Initializing metrics...")
+        self.gpu_utilization = Gauge(
+            'k8s_gpu_utilization', 
+            'GPU utilization percentage',
+            ['node', 'namespace', 'pod', 'gpu_id']
+        )
+        self.gpu_memory_used = Gauge(
+            'k8s_gpu_memory_used',
+            'GPU memory used in bytes',
+            ['node', 'namespace', 'pod', 'gpu_id']
+        )
+        self.gpu_memory_total = Gauge(
+            'k8s_gpu_memory_total',
+            'Total GPU memory in bytes',
+            ['node', 'namespace', 'pod', 'gpu_id']
+        )
+        self.gpu_power_usage = Gauge(
+            'k8s_gpu_power_usage',
+            'GPU power usage in watts',
+            ['node', 'namespace', 'pod', 'gpu_id']
+        )
+        self.collection_errors = Counter(
+            'k8s_gpu_collector_errors_total',
+            'Total number of collection errors',
+            ['type']
+        )
+        logger.debug("Metrics initialized successfully")
 
 class K8sGPUExporter:
     def __init__(self):
+        logger.debug("Initializing exporter...")
+        self.metrics = K8sGPUMetrics()
+        self.watched_namespaces = [
+            'arc-iree-gpu',
+            'buildkite',
+            'tuning'
+        ]
+
+        # Load kubernetes configuration
+        kubeconfig_path = os.environ.get('KUBECONFIG', '/etc/kubernetes/kubeconfig')
+        logger.debug(f"Using kubeconfig path: {kubeconfig_path}")
+        
+        if not os.path.exists(kubeconfig_path):
+            raise Exception(f"Kubeconfig not found at {kubeconfig_path}")
+            
         try:
-            logger.debug("Initializing exporter...")
-            self.metrics = K8sGPUMetrics()
-            self.watched_namespaces = [
-                'arc-iree-gpu',
-                'buildkite',
-                'tuning'
-            ]
-            
-            # Check if kubeconfig exists
-            kubeconfig = os.environ.get('KUBECONFIG')
-            logger.debug(f"Using KUBECONFIG: {kubeconfig}")
-            if kubeconfig and os.path.exists(kubeconfig):
-                logger.debug("Loading kubeconfig...")
-                config.load_kube_config()
-            else:
-                logger.debug("Trying in-cluster config...")
-                config.load_incluster_config()
-                
-            self.k8s_client = client.CoreV1Api()
-            logger.debug("Kubernetes client initialized")
-            
-            # Test kubernetes connection
-            try:
-                self.k8s_client.list_namespace()
-                logger.debug("Successfully connected to Kubernetes")
-            except Exception as e:
-                logger.error(f"Failed to connect to Kubernetes: {e}")
-                raise
-                
+            config.load_kube_config(config_file=kubeconfig_path)
+            logger.info("Successfully loaded kubeconfig")
         except Exception as e:
-            logger.error(f"Error in initialization: {e}")
-            logger.error(traceback.format_exc())
+            logger.error(f"Error loading kubeconfig: {e}")
             raise
-            
+
+        self.k8s_client = client.CoreV1Api()
+        
+        # Test kubernetes connection
+        try:
+            namespaces = self.k8s_client.list_namespace()
+            logger.info(f"Successfully connected to Kubernetes. Found {len(namespaces.items)} namespaces")
+        except Exception as e:
+            logger.error(f"Failed to connect to Kubernetes: {e}")
+            raise
+
     def _get_gpu_metrics_from_rocm(self):
         try:
-            logger.debug("Executing rocm-smi...")
+            logger.debug("Checking rocm-smi...")
+            rocm_smi_path = subprocess.check_output(['which', 'rocm-smi']).decode().strip()
+            logger.info(f"Found rocm-smi at: {rocm_smi_path}")
             
-            # First check if rocm-smi exists
-            try:
-                subprocess.run(['which', 'rocm-smi'], check=True, capture_output=True)
-                logger.debug("rocm-smi found in PATH")
-            except subprocess.CalledProcessError:
-                logger.error("rocm-smi not found in PATH")
-                return None
-                
             result = subprocess.run(
-                ['rocm-smi', '--showuse', '--showmemuse', '--showpower'],
+                [rocm_smi_path, '--showuse', '--showmemuse', '--showpower'],
                 capture_output=True,
                 text=True
             )
@@ -111,31 +97,73 @@ class K8sGPUExporter:
             if result.returncode != 0:
                 logger.error(f"rocm-smi error: {result.stderr}")
                 return None
-                
+            
             logger.debug(f"rocm-smi output: {result.stdout[:200]}...")
             return result.stdout
             
+        except subprocess.CalledProcessError:
+            logger.error("rocm-smi not found in PATH")
+            return None
         except Exception as e:
             logger.error(f"Error executing rocm-smi: {e}")
             logger.error(traceback.format_exc())
             self.metrics.collection_errors.labels(type='rocm_smi').inc()
             return None
 
-    def collect_metrics(self):
-        try:
-            logger.debug("Starting metrics collection...")
-            metrics = self._get_gpu_metrics_from_rocm()
-            if not metrics:
-                logger.error("Failed to collect GPU metrics")
-                return
+    def _get_gpu_pods(self):
+        gpu_pods = []
+        for namespace in self.watched_namespaces:
+            try:
+                logger.debug(f"Fetching pods from namespace: {namespace}")
+                pods = self.k8s_client.list_namespaced_pod(namespace)
+                for pod in pods.items:
+                    for container in pod.spec.containers:
+                        if (container.resources and 
+                            container.resources.limits and 
+                            'amd.com/gpu' in container.resources.limits):
+                            gpu_pods.append({
+                                'name': pod.metadata.name,
+                                'namespace': pod.metadata.namespace,
+                                'node': pod.spec.node_name if pod.spec.node_name else 'unknown',
+                                'gpu_count': int(container.resources.limits['amd.com/gpu'])
+                            })
+                            logger.info(f"Found GPU pod: {pod.metadata.name} in {namespace}")
                 
-            logger.debug("Successfully collected GPU metrics")
-            # Process metrics here...
-            
-        except Exception as e:
-            logger.error(f"Error in collect_metrics: {e}")
-            logger.error(traceback.format_exc())
-            time.sleep(5)  # Add delay before retry
+            except Exception as e:
+                logger.error(f"Error getting pods from namespace {namespace}: {e}")
+                self.metrics.collection_errors.labels(type='k8s_api').inc()
+                
+        logger.info(f"Total GPU pods found: {len(gpu_pods)}")
+        return gpu_pods
+
+    def collect_metrics(self):
+        logger.debug("Starting metrics collection...")
+        
+        # Get GPU metrics
+        gpu_metrics = self._get_gpu_metrics_from_rocm()
+        if gpu_metrics:
+            logger.info("Successfully collected GPU metrics")
+        else:
+            logger.error("Failed to collect GPU metrics")
+            return
+
+        # Get pods using GPUs
+        gpu_pods = self._get_gpu_pods()
+        
+        # Update metrics for each pod
+        for pod in gpu_pods:
+            try:
+                # Example metric update - adjust based on your rocm-smi output format
+                self.metrics.gpu_utilization.labels(
+                    node=pod['node'],
+                    namespace=pod['namespace'],
+                    pod=pod['name'],
+                    gpu_id='0'
+                ).set(0)  # Replace with actual value from gpu_metrics
+                
+            except Exception as e:
+                logger.error(f"Error updating metrics for pod {pod['name']}: {e}")
+                self.metrics.collection_errors.labels(type='update_metrics').inc()
 
 def main():
     try:
@@ -143,13 +171,9 @@ def main():
         collection_interval = int(os.environ.get('COLLECTION_INTERVAL', 15))
 
         logger.info(f"Starting Kubernetes GPU exporter on port {port}")
-        logger.debug(f"Environment variables: KUBECONFIG={os.environ.get('KUBECONFIG')}")
-        
         start_http_server(port)
-        logger.debug("HTTP server started")
         
         exporter = K8sGPUExporter()
-        logger.debug("Exporter initialized")
         
         while True:
             try:
