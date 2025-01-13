@@ -37,7 +37,7 @@ This solution provides comprehensive GPU monitoring for AMD GPUs across multiple
 
 ### 1. Clone the Repository
 ```bash
-git clone <repository-url>
+git clone https://github.com/iamakanshab/gpu-monitoring.git
 cd gpu-monitoring
 ```
 
