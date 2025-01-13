@@ -1,0 +1,15 @@
+[Unit]
+Description=Kubernetes GPU Metrics Exporter
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Environment=KUBECONFIG=/path/to/your/kubeconfig
+Environment=EXPORTER_PORT=9400
+ExecStart=/path/to/gpu-exporter-env/bin/python /path/to/k8s-gpu-exporter.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
