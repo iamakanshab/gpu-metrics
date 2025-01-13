@@ -1,238 +1,172 @@
-# GPU Monitoring Stack with Grafana
-Kubernetes-based monitoring solution for AMD GPUs using Grafana, Prometheus, and ROCm metrics.
+# AMD GPU Monitoring Solution for Multi-Cluster Kubernetes
 
-## Prerequisites
-
-- Kubernetes cluster
-- kubectl CLI tool
-- AMD GPUs with ROCm drivers
-- ROCm SMI tools installed on GPU nodes
-
-## AMD-specific metrics:
-
-- GPU utilization
-- Memory usage
-- Temperature
-- Power consumption
+## Overview
+This solution provides comprehensive GPU monitoring for AMD GPUs across multiple Kubernetes clusters (OCI and bare metal) with metrics visualization in AWS-hosted Grafana. It supports namespace-level segregation for tenant-specific monitoring and utilization tracking.
 
 ## Architecture
 ```
-GPU Nodes → ROCm Exporter → Prometheus → Grafana
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│ OCI Cluster  │    │ OCI Cluster  │    │ Bare Metal   │
+│ ROCm Exporter│    │ ROCm Exporter│    │ ROCm Exporter│
+└──────┬───────┘    └──────┬───────┘    └──────┬───────┘
+       │                   │                    │
+       │                   │                    │
+┌──────┼───────────────────┼────────────────────┼───────┐
+│      │                   │                    │       │
+│   ┌──┴───────────────────┴────────────────────┴──┐   │
+│   │           Prometheus Remote Write            │   │
+│   └──────────────────────┬─────────────────────┬─┘   │
+│                          │                     │      │
+│                          │                     │      │
+└──────────────────────────┼─────────────────────┼──────┘
+                           │                     │
+                     ┌─────┴─────────────────────┴────┐
+                     │     AWS-hosted Grafana         │
+                     └────────────────────────────────┘
 ```
 
-## Quick Start
+## Prerequisites
+- Kubernetes clusters (OCI or bare metal) with AMD GPUs
+- ROCm driver installed on GPU nodes
+- Prometheus Operator installed
+- Existing Grafana instance in AWS
+- Network connectivity between clusters and AWS
+- `kubectl` and `envsubst` installed locally
 
-1. Create namespace:
+## Installation
+
+### 1. Clone the Repository
 ```bash
-kubectl create namespace metrics
+git clone <repository-url>
+cd gpu-monitoring
 ```
 
-2. Deploy ROCm SMI Exporter:
+### 2. Configure Environment Variables
+Create an environment file for each cluster:
 ```bash
-kubectl apply -f - <<EOF
-apiVersion: apps/v1
-kind: DaemonSet
-metadata:
-  name: rocm-smi-exporter
-  namespace: metrics
-spec:
-  selector:
-    matchLabels:
-      app: rocm-smi-exporter
-  template:
-    metadata:
-      labels:
-        app: rocm-smi-exporter
-    spec:
-      containers:
-      - name: rocm-smi-exporter
-        image: ubuntu:20.04
-        command:
-        - bash
-        - -c
-        args:
-        - |
-          apt-get update && \
-          DEBIAN_FRONTEND=noninteractive apt-get install -y curl && \
-          curl -fsSL https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor -o /etc/apt/trusted.gpg.d/rocm.gpg && \
-          echo 'deb [arch=amd64] https://repo.radeon.com/rocm/apt/5.4.3 ubuntu main' | tee /etc/apt/sources.list.d/rocm.list && \
-          apt-get update && \
-          DEBIAN_FRONTEND=noninteractive apt-get install -y rocm-smi && \
-          while true; do
-            for gpu in $(rocm-smi --listnodes 2>/dev/null || echo ""); do
-              echo "# HELP amd_gpu_utilization GPU Utilization percentage"
-              utilization=$(rocm-smi -d $gpu --showuse | grep "GPU use" | awk '{print $4}')
-              echo "amd_gpu_utilization{gpu=\"$gpu\"} ${utilization:-0}"
-              
-              echo "# HELP amd_gpu_memory_used_mb GPU Memory Used in MB"
-              memory=$(rocm-smi -d $gpu --showmemuse | grep "GPU memory use" | awk '{print $5}')
-              echo "amd_gpu_memory_used_mb{gpu=\"$gpu\"} ${memory:-0}"
-              
-              echo "# HELP amd_gpu_temperature_celsius GPU Temperature"
-              temp=$(rocm-smi -d $gpu --showtemp | grep "Temperature" | awk '{print $2}')
-              echo "amd_gpu_temperature_celsius{gpu=\"$gpu\"} ${temp:-0}"
-            done
-            sleep 15
-          done
-        securityContext:
-          privileged: true
-        volumeMounts:
-        - name: dev
-          mountPath: /dev
-        - name: sys
-          mountPath: /sys
-      volumes:
-      - name: dev
-        hostPath:
-          path: /dev
-      - name: sys
-        hostPath:
-          path: /sys
+cat > cluster-env.sh << EOF
+export CLUSTER_NAME="cluster-name"
+export ENVIRONMENT="production"
+export GRAFANA_USER="your-grafana-user"
+export GRAFANA_API_KEY="your-api-key"
+export BASE64_GRAFANA_USER=$(echo -n $GRAFANA_USER | base64)
+export BASE64_GRAFANA_API_KEY=$(echo -n $GRAFANA_API_KEY | base64)
 EOF
 ```
 
-3. Deploy Grafana with GPU dashboard:
+### 3. Deploy Monitoring Stack
 ```bash
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: grafana-dashboards
-  namespace: metrics
+# Source environment variables
+source cluster-env.sh
+
+# Apply configurations
+kubectl create namespace monitoring
+envsubst < prometheus-values.yaml | kubectl apply -f -
+kubectl apply -f rocm-exporter.yaml
+```
+
+### 4. Verify Installation
+```bash
+# Check if pods are running
+kubectl get pods -n monitoring
+
+# Verify metrics collection
+kubectl port-forward svc/rocm-exporter 9400:9400 -n monitoring
+curl localhost:9400/metrics
+```
+
+## Configuration
+
+### Namespace Configuration
+Update the `rocm-exporter-config` ConfigMap to include your namespaces:
+```yaml
 data:
-  gpu-dashboard.json: |
-    {
-      "title": "GPU Metrics Dashboard",
-      "panels": [
-        {
-          "title": "GPU Utilization",
-          "targets": [
-            {
-              "expr": "amd_gpu_utilization",
-              "legendFormat": "GPU {{gpu}}"
-            }
-          ],
-          "type": "timeseries"
-        },
-        {
-          "title": "Memory Usage",
-          "targets": [
-            {
-              "expr": "amd_gpu_memory_used_mb",
-              "legendFormat": "GPU {{gpu}}"
-            }
-          ],
-          "type": "timeseries"
-        },
-        {
-          "title": "Temperature",
-          "targets": [
-            {
-              "expr": "amd_gpu_temperature_celsius",
-              "legendFormat": "GPU {{gpu}}"
-            }
-          ],
-          "type": "timeseries"
-        }
-      ]
-    }
-EOF
+  config.yaml: |
+    namespaces:
+      - namespace1
+      - namespace2
+      - namespace3
 ```
 
-## Available Metrics
+### Network Configuration
+1. **AWS VPC Configuration**
+   - Configure security groups to allow inbound traffic from cluster IPs
+   - Set up VPC peering or VPN if required
 
-### GPU Core Metrics
-- `amd_gpu_utilization`: GPU utilization percentage
-- `amd_gpu_memory_used_mb`: Memory usage in MB
-- `amd_gpu_temperature_celsius`: GPU temperature
+2. **OCI Network Setup**
+   - Configure security lists to allow egress to AWS Grafana
+   - Set up FastConnect or VPN if required
 
-### ROCm-smi Commands
-```bash
-# List GPUs
-rocm-smi --listnodes
+3. **Bare Metal Configuration**
+   - Configure firewall rules for Grafana connectivity
+   - Set up appropriate routing for AWS access
 
-# Show GPU usage
-rocm-smi --showuse
+## Metrics and Alerts
 
-# Show memory usage
-rocm-smi --showmemuse
+### Available Metrics
+- `GPU_UTILIZATION`: GPU utilization percentage
+- `GPU_MEMORY_USED`: Used GPU memory in bytes
+- `GPU_MEMORY_TOTAL`: Total GPU memory in bytes
+- `GPU_POWER_USAGE`: Power usage in watts
 
-# Show temperature
-rocm-smi --showtemp
-```
-
-## Dashboard Configuration
-
-### Default GPU Dashboard
-- Utilization panel with 80% threshold alert
-- Memory usage trend
-- Temperature monitoring
-- Auto-refresh every 5s
-
-### Custom Queries
+### Example PromQL Queries
 ```promql
-# GPU Utilization Rate
-rate(amd_gpu_utilization[5m])
+# Namespace GPU Utilization
+avg(GPU_UTILIZATION) by (namespace, cluster)
 
-# Memory Usage Change
-delta(amd_gpu_memory_used_mb[1h])
+# Memory Usage per Namespace
+sum(GPU_MEMORY_USED) by (namespace, cluster) / sum(GPU_MEMORY_TOTAL) by (namespace, cluster) * 100
 
-# High Temperature Alert
-amd_gpu_temperature_celsius > 80
+# Power Usage Trends
+rate(GPU_POWER_USAGE[5m])
 ```
+
+### Default Alerts
+- High GPU Utilization (>90% for 10m)
+- High Memory Usage (>90% for 10m)
 
 ## Troubleshooting
 
-### ROCm Exporter Issues
+### Common Issues
+1. **Metrics Not Showing in Grafana**
+   - Verify remote write configuration
+   - Check network connectivity
+   - Validate Grafana API credentials
+
+2. **ROCm Exporter Issues**
+   - Verify ROCm driver installation
+   - Check pod logs for errors
+   - Validate node selector configuration
+
+3. **Network Connectivity**
+   - Verify security group configurations
+   - Check VPC/VPN connectivity
+   - Validate firewall rules
+
+### Debugging Commands
 ```bash
-# Check ROCm-smi installation
-kubectl exec -it -n metrics <pod-name> -- rocm-smi --version
+# Check ROCm exporter logs
+kubectl logs -l app=rocm-exporter -n monitoring
 
-# Verify GPU detection
-kubectl exec -it -n metrics <pod-name> -- rocm-smi --listnodes
+# Verify Prometheus remote write
+kubectl logs -l app=prometheus -n monitoring | grep "remote write"
 
-# Check metrics output
-kubectl logs -n metrics -l app=rocm-smi-exporter
+# Test network connectivity
+kubectl run nettest --rm -it --image=busybox -- ping grafana.aws.example.com
 ```
 
-### Common Problems
+## Security Considerations
+- Use TLS for all metric transport
+- Implement network policies
+- Regularly rotate Grafana API keys
+- Use least privilege RBAC configurations
+- Secure sensitive configuration data in Secrets
 
-1. No GPU metrics:
-```bash
-# Verify ROCm driver installation
-kubectl exec -it -n metrics <pod-name> -- ls -l /dev/kfd /dev/dri
+## Support and Maintenance
+- For issues, please create a ticket in the repository
+- Regular updates recommended for security patches
+- Monitor Prometheus remote write performance
+- Keep ROCm drivers and exporter up to date
 
-# Check ROCm-smi access
-kubectl exec -it -n metrics <pod-name> -- rocm-smi
-```
-
-2. Permission issues:
-```bash
-# Check pod security context
-kubectl get pod <pod-name> -n metrics -o yaml | grep -A 5 securityContext
-```
-
-## Resource Requirements
-
-ROCm Exporter:
-```yaml
-resources:
-  requests:
-    cpu: 100m
-    memory: 128Mi
-  limits:
-    cpu: 200m
-    memory: 256Mi
-```
-
-## Security
-
-1. ROCm-smi requires privileged access
-2. Secure metrics endpoint
-3. Implement RBAC
-4. Use secrets for credentials
-
-## Cleanup
-```bash
-kubectl delete namespace metrics
-```
+## License
+[Add your license information here]
