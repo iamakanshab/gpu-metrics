@@ -1,0 +1,89 @@
+$ sudo KUBECONFIG=/etc/kubernetes/kubeconfig python3 /opt/gpu-exporter/k8s-gpu-exporter.py
+2025-01-13 16:09:30,179 - k8s-gpu-exporter - INFO - Starting Kubernetes GPU exporter on port 9400
+2025-01-13 16:09:30,179 - k8s-gpu-exporter - INFO - Collection interval: 300 seconds
+2025-01-13 16:09:30,180 - k8s-gpu-exporter - INFO - Initializing exporter...
+2025-01-13 16:09:30,180 - k8s-gpu-exporter - INFO - Initializing metrics...
+2025-01-13 16:09:30,180 - k8s-gpu-exporter - INFO - Metrics initialized successfully
+2025-01-13 16:09:30,180 - k8s-gpu-exporter - INFO - Loading Kubernetes configuration...
+2025-01-13 16:09:30,217 - k8s-gpu-exporter - INFO - Connected to Kubernetes. Found 13 namespaces
+2025-01-13 16:09:30,217 - k8s-gpu-exporter - INFO - Starting metrics collection...
+2025-01-13 16:09:30,217 - k8s-gpu-exporter - INFO - Attempting to collect GPU metrics...
+2025-01-13 16:09:30,219 - k8s-gpu-exporter - INFO - rocm-smi path: /usr/bin/rocm-smi
+2025-01-13 16:09:30,345 - k8s-gpu-exporter - INFO - GPU metrics collected:
+
+============================ ROCm System Management Interface ============================
+=================================== Power Consumption ====================================
+GPU[0]          : Current Socket Graphics Package Power (W): 152.0
+GPU[1]          : Current Socket Graphics Package Power (W): 144.0
+GPU[2]          : Current Socket Graphics Package Power (W): 153.0
+GPU[3]          : Current Socket Graphics Package Power (W): 145.0
+GPU[4]          : Current Socket Graphics Package Power (W): 159.0
+GPU[5]          : Current Socket Graphics Package Power (W): 144.0
+GPU[6]          : Current Socket Graphics Package Power (W): 147.0
+GPU[7]          : Current Socket Graphics Package Power (W): 143.0
+==========================================================================================
+=================================== % time GPU is busy ===================================
+GPU[0]          : GPU use (%): 0
+GPU[0]          : GFX Activity: 946516092
+GPU[1]          : GPU use (%): 0
+GPU[1]          : GFX Activity: 964066906
+GPU[2]          : GPU use (%): 0
+GPU[2]          : GFX Activity: 982094768
+GPU[3]          : GPU use (%): 0
+GPU[3]          : GFX Activity: 2498214301
+GPU[4]          : GPU use (%): 0
+GPU[4]          : GFX Activity: 934835131
+GPU[5]          : GPU use (%): 0
+GPU[5]          : GFX Activity: 940534365
+GPU[6]          : GPU use (%): 0
+GPU[6]          : GFX Activity: 952531852
+GPU[7]          : GPU use (%): 0
+GPU[7]          : GFX Activity: 1094741997
+==========================================================================================
+=================================== Current Memory Use ===================================
+GPU[0]          : GPU Memory Allocated (VRAM%): 0
+GPU[0]          : GPU Memory Read/Write Activity (%): 0
+GPU[0]          : Memory Activity: 18864983
+GPU[0]          : Avg. Memory Bandwidth: 0
+GPU[1]          : GPU Memory Allocated (VRAM%): 0
+GPU[1]          : GPU Memory Read/Write Activity (%): 0
+GPU[1]          : Memory Activity: 9390624
+GPU[1]          : Avg. Memory Bandwidth: 0
+GPU[2]          : GPU Memory Allocated (VRAM%): 2
+GPU[2]          : GPU Memory Read/Write Activity (%): 0
+GPU[2]          : Memory Activity: 21642360
+GPU[2]          : Avg. Memory Bandwidth: 0
+GPU[3]          : GPU Memory Allocated (VRAM%): 1
+GPU[3]          : GPU Memory Read/Write Activity (%): 0
+GPU[3]          : Memory Activity: 95984008
+GPU[3]          : Avg. Memory Bandwidth: 0
+GPU[4]          : GPU Memory Allocated (VRAM%): 0
+GPU[4]          : GPU Memory Read/Write Activity (%): 0
+GPU[4]          : Memory Activity: 8650445
+GPU[4]          : Avg. Memory Bandwidth: 0
+GPU[5]          : GPU Memory Allocated (VRAM%): 0
+GPU[5]          : GPU Memory Read/Write Activity (%): 0
+GPU[5]          : Memory Activity: 11600042
+GPU[5]          : Avg. Memory Bandwidth: 0
+GPU[6]          : GPU Memory Allocated (VRAM%): 0
+GPU[6]          : GPU Memory Read/Write Activity (%): 0
+GPU[6]          : Memory Activity: 18691534
+GPU[6]          : Avg. Memory Bandwidth: 0
+GPU[7]          : GPU Memory Allocated (VRAM%): 0
+GPU[7]          : GPU Memory Read/Write Activity (%): 0
+GPU[7]          : Memory Activity: 25463517
+GPU[7]          : Avg. Memory Bandwidth: 0
+==========================================================================================
+================================== End of ROCm SMI Log ===================================
+
+2025-01-13 16:09:30,346 - k8s-gpu-exporter - INFO - Checking namespace: arc-iree-gpu
+2025-01-13 16:09:30,369 - k8s-gpu-exporter - INFO - Checking namespace: buildkite
+2025-01-13 16:09:30,453 - k8s-gpu-exporter - INFO - Found GPU pod: buildkite-01946090-e07d-4553-80e2-1bb65ebc652f-8lsgg in buildkite
+2025-01-13 16:09:30,453 - k8s-gpu-exporter - INFO - Found GPU pod: buildkite-01946090-e07d-4fae-b19d-01dd87de8d02-9mlrl in buildkite
+2025-01-13 16:09:30,453 - k8s-gpu-exporter - INFO - Found GPU pod: buildkite-01946090-e07e-4a37-a1fd-0eadeea4eeed-w82mt in buildkite
+2025-01-13 16:09:30,453 - k8s-gpu-exporter - INFO - Found GPU pod: buildkite-01946090-e080-4017-aae9-1a034b3e22de-mvtlp in buildkite
+2025-01-13 16:09:30,453 - k8s-gpu-exporter - INFO - Found GPU pod: buildkite-01946090-e082-4b00-9f41-ef94109d0f1c-x5dgj in buildkite
+2025-01-13 16:09:30,453 - k8s-gpu-exporter - INFO - Found GPU pod: buildkite-01946090-e083-4898-b809-76580ba91c98-sc5xs in buildkite
+2025-01-13 16:09:30,453 - k8s-gpu-exporter - INFO - Checking namespace: tuning
+2025-01-13 16:09:30,466 - k8s-gpu-exporter - INFO - Total GPU pods found: 6
+2025-01-13 16:09:30,466 - k8s-gpu-exporter - INFO - Current node: SharkMi300X
