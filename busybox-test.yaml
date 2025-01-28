@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: busybox-tester
+  namespace: gpu-metrics-test
+spec:
+  containers:
+  - name: busybox
+    image: busybox
+    command:
+    - /bin/sh
+    - -c
+    - |
+      echo "Testing internal service access..."
+      while true; do
+        echo "=== $(date) ==="
+        echo "Testing NodePort access..."
+        wget -qO- http://10.6.203.138:30400/metrics
+        echo "Testing ClusterIP access..."
+        wget -qO- http://gpu-metrics-nodeport:9400/metrics
+        sleep 30
+      done
