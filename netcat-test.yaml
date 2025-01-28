@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: gpu-metrics-collector
+  namespace: gpu-metrics-test
+spec:
+  selector:
+    matchLabels:
+      app: gpu-metrics-collector
+  template:
+    metadata:
+      labels:
+        app: gpu-metrics-collector
+    spec:
+      hostNetwork: true
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+      nodeSelector:
+        kubernetes.io/hostname: node1
+      containers:
+      - name: gpu-collector
+        image: ubuntu:22.04
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -x
+          
+          echo "Installing packages..."
+          apt-get update
+          apt-get install -y netcat-openbsd iproute2 net-tools
+          
+          echo "Checking network configuration..."
+          ip addr
+          netstat -tulpn
+          
+          echo "Starting netcat listener..."
+          while true; do
+            echo -e "HTTP/1.1 200 OK\n\nHello $(date)" | nc -l -p 30800 -q 1
+          done
+        ports:
+        - containerPort: 30800
+          hostPort: 30800
+        securityContext:
+          privileged: true  # Enable for network access
+        readinessProbe:
+          tcpSocket:
+            port: 30800
+          initialDelaySeconds: 10
+          periodSeconds: 5
+---
+# Add a test service to verify connectivity
+apiVersion: v1
+kind: Service
+metadata:
+  name: gpu-metrics-test
+  namespace: gpu-metrics-test
+spec:
+  type: NodePort
+  ports:
+  - port: 30800
+    targetPort: 30800
+    nodePort: 30800
+  selector:
+    app: gpu-metrics-collector
