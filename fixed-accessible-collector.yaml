@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: gpu-metrics-collector
+  namespace: gpu-metrics-test
+spec:
+  selector:
+    matchLabels:
+      app: gpu-metrics-collector
+  template:
+    metadata:
+      labels:
+        app: gpu-metrics-collector
+    spec:
+      hostNetwork: true
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+      nodeSelector:
+        kubernetes.io/hostname: node1  # Try control plane node first
+      containers:
+      - name: gpu-collector
+        image: ubuntu:22.04
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -x
+          # Redirect all output to file
+          mkdir -p /var/log/collector
+          exec 1> >(tee -a /var/log/collector/collector.log)
+          exec 2>&1
+          
+          echo "Installing packages..."
+          apt-get update
+          apt-get install -y curl python3-minimal python3-pip netcat net-tools
+          
+          echo "Starting basic HTTP server..."
+          cd /var/log/collector
+          echo "Diagnostics running..." > index.html
+          python3 -m http.server 30800
+        ports:
+        - containerPort: 30800
+          hostPort: 30800
+        volumeMounts:
+        - name: collector-logs
+          mountPath: /var/log/collector
+      volumes:
+      - name: collector-logs
+        emptyDir: {}
