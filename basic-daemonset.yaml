@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: gpu-metrics-collector
+  namespace: gpu-metrics-test
+spec:
+  selector:
+    matchLabels:
+      app: gpu-metrics-collector
+  template:
+    metadata:
+      labels:
+        app: gpu-metrics-collector
+    spec:
+      hostNetwork: true
+      containers:
+      - name: gpu-collector
+        image: python:3.9-slim
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -x
+          apt-get update
+          apt-get install -y python3-pip curl procps netcat net-tools iproute2
+          pip install kubernetes prometheus-client
+          
+          echo "Checking network status..."
+          ip addr
+          
+          echo "Checking listening ports..."
+          netstat -tulpn
+          
+          echo "Starting collector..."
+          PYTHONUNBUFFERED=1 python3 /app/collector.py
+        ports:
+        - containerPort: 9400
+          hostPort: 9400
+          name: metrics
+          protocol: TCP
+        env:
+        - name: COLLECTION_INTERVAL
+          value: "30"
+        - name: EXPORTER_PORT
+          value: "9400"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        volumeMounts:
+        - name: collector-script
+          mountPath: /app
+        - name: rocm
+          mountPath: /opt/rocm
+        securityContext:
+          privileged: true
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"
+      volumes:
+      - name: collector-script
+        configMap:
+          name: gpu-collector-script
+          defaultMode: 0777
+      - name: rocm
+        hostPath:
+          path: /opt/rocm
