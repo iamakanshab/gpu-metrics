@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: gpu-metrics-collector-test
+  namespace: gpu-metrics-test
+  labels:
+    app: gpu-metrics-collector
+spec:
+  serviceAccountName: gpu-metrics-collector
+  containers:
+  - name: gpu-collector
+    image: python:3.9-slim
+    command:
+    - /bin/bash
+    - -c
+    - |
+      apt-get update && \
+      apt-get install -y python3-pip curl procps && \
+      pip install kubernetes prometheus-client && \
+      # Create log directory
+      mkdir -p /var/log/gpu-collector && \
+      # Run the collector with both stdout and file logging
+      PYTHONUNBUFFERED=1 python3 /app/collector.py 2>&1 | tee /var/log/gpu-collector/collector.log
+    ports:
+    - containerPort: 9400
+      name: metrics
+    env:
+    - name: COLLECTION_INTERVAL
+      value: "30"
+    - name: EXPORTER_PORT
+      value: "9400"
+    - name: PYTHONUNBUFFERED
+      value: "1"
+    volumeMounts:
+    - name: collector-script
+      mountPath: /app
+    - name: rocm
+      mountPath: /opt/rocm
+    - name: collector-logs
+      mountPath: /var/log/gpu-collector
+    securityContext:
+      privileged: true
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "200m"
+  volumes:
+  - name: collector-script
+    configMap:
+      name: gpu-collector-script
+      defaultMode: 0777
+  - name: rocm
+    hostPath:
+      path: /opt/rocm
+  - name: collector-logs
+    emptyDir: {}
+---
+# Add a metrics Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: gpu-metrics-collector
+  namespace: gpu-metrics-test
+spec:
+  type: ClusterIP
+  ports:
+  - port: 9400
+    targetPort: metrics
+    protocol: TCP
+    name: metrics
+  selector:
+    app: gpu-metrics-collector
