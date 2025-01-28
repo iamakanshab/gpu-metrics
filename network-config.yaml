@@ -1,0 +1,100 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gpu-metrics
+  namespace: gpu-metrics-test
+spec:
+  podSelector:
+    matchLabels:
+      app: gpu-metrics-collector
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 9400
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: gpu-metrics-collector
+  namespace: gpu-metrics-test
+spec:
+  selector:
+    matchLabels:
+      app: gpu-metrics-collector
+  template:
+    metadata:
+      labels:
+        app: gpu-metrics-collector
+    spec:
+      hostNetwork: true  # Use host network to bypass potential network issues
+      nodeSelector:
+        kubernetes.io/hostname: node6  # Target specific GPU node
+      tolerations:
+      - operator: Exists  # Allow scheduling on all nodes
+      containers:
+      - name: gpu-collector
+        image: python:3.9-slim
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -x
+          apt-get update
+          apt-get install -y python3-pip curl procps netcat
+          pip install kubernetes prometheus-client
+          
+          echo "Starting collector with host networking..."
+          PYTHONUNBUFFERED=1 exec python3 /app/collector.py
+        ports:
+        - containerPort: 9400
+          hostPort: 9400
+          name: metrics
+          protocol: TCP
+        env:
+        - name: COLLECTION_INTERVAL
+          value: "30"
+        - name: EXPORTER_PORT
+          value: "9400"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        volumeMounts:
+        - name: collector-script
+          mountPath: /app
+        - name: rocm
+          mountPath: /opt/rocm
+        securityContext:
+          privileged: true
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"
+      volumes:
+      - name: collector-script
+        configMap:
+          name: gpu-collector-script
+          defaultMode: 0777
+      - name: rocm
+        hostPath:
+          path: /opt/rocm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gpu-metrics-service
+  namespace: gpu-metrics-test
+spec:
+  type: ClusterIP
+  ports:
+  - port: 9400
+    targetPort: 9400
+    protocol: TCP
+    name: metrics
+  selector:
+    app: gpu-metrics-collector
