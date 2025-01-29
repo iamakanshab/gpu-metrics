@@ -288,27 +288,31 @@ class K8sGPUExporter:
                     return 0.0
             
             # Parse GPU utilization
+            gpu_counter = 0
             for line in result_util.stdout.splitlines():
-                if 'GPU' in line and '%' in line:
-                    gpu_id = str(len(metrics))  # Use counter as GPU ID
+                if 'GPU' in line and gpu_counter < 8:  # Only process 8 GPUs
+                    gpu_id = str(gpu_counter)
                     metrics[gpu_id] = {'utilization': extract_percentage(line)}
+                    gpu_counter += 1
             
             # Parse memory usage
             gpu_counter = 0
             for line in result_mem.stdout.splitlines():
-                if 'GPU' in line and '%' in line:
+                if 'GPU' in line and gpu_counter < 8:  # Only process 8 GPUs
                     gpu_id = str(gpu_counter)
-                    if gpu_id in metrics:
-                        metrics[gpu_id]['memory'] = extract_percentage(line)
+                    if gpu_id not in metrics:
+                        metrics[gpu_id] = {}
+                    metrics[gpu_id]['memory'] = extract_percentage(line)
                     gpu_counter += 1
             
             # Parse power usage
             gpu_counter = 0
             for line in result_power.stdout.splitlines():
-                if 'GPU' in line and 'W' in line:
+                if 'GPU' in line and gpu_counter < 8:  # Only process 8 GPUs
                     gpu_id = str(gpu_counter)
-                    if gpu_id in metrics:
-                        metrics[gpu_id]['power'] = extract_power(line)
+                    if gpu_id not in metrics:
+                        metrics[gpu_id] = {}
+                    metrics[gpu_id]['power'] = extract_power(line)
                     gpu_counter += 1
             
             self.logger.info(f"Collected metrics for {len(metrics)} GPUs")
