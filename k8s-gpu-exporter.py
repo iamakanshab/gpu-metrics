@@ -69,11 +69,11 @@ class GPUPodMapper:
     def get_pod_gpu_mappings(self) -> Dict[str, Dict[str, str]]:
         """Get mappings of GPU devices to pods and namespaces."""
         try:
-            self.logger.info(f"Getting pod GPU mappings for node {os.uname().nodename}")
+            self.logger.info(f"Getting pod GPU mappings for node {self.current_node}")
             
             # List all pods on this node
             pods = self.k8s_client.list_pod_for_all_namespaces(
-                field_selector=f"spec.nodeName={os.uname().nodename}"
+                field_selector=f"spec.nodeName={self.current_node}"
             )
             
             self.logger.info(f"Found {len(pods.items)} pods on this node")
