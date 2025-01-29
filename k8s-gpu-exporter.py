@@ -66,6 +66,20 @@ class GPUPodMapper:
         self.k8s_client = k8s_client
         self.current_node = node_name
         self.logger = logging.getLogger('k8s-gpu-exporter')
+        
+        # Static mapping of PCI bus IDs to indices
+        self.bus_to_idx = {
+            '0000:05:00.0': '0',
+            '0000:26:00.0': '1',
+            '0000:46:00.0': '2',
+            '0000:65:00.0': '3',
+            '0000:85:00.0': '4',
+            '0000:a6:00.0': '5',
+            '0000:c6:00.0': '6',
+            '0000:e5:00.0': '7'
+        }
+        
+        self.idx_to_bus = {v: k for k, v in self.bus_to_idx.items()}
 
     def get_pod_gpu_mappings(self) -> Dict[str, Dict[str, str]]:
         """Get mappings of GPU devices to pods and namespaces."""
