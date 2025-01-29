@@ -182,7 +182,9 @@ class K8sGPUExporter:
         self.logger.info("Initializing namespace-aware exporter...")
         
         self.metrics = K8sGPUMetrics()
-        self.current_node = os.uname().nodename
+        
+        # Get node name with fallbacks
+        self.current_node = self._get_node_name()
         
         # Initialize Kubernetes client with fallback options
         try:
@@ -217,6 +219,36 @@ class K8sGPUExporter:
         self.k8s_client = client.CoreV1Api()
         self.gpu_mapper = GPUPodMapper(self.k8s_client)
         self.logger.info(f"Exporter initialized on node: {self.current_node}")
+        
+        # Print available nodes for debugging
+        try:
+            nodes = self.k8s_client.list_node()
+            self.logger.info("Available nodes in cluster:")
+            for node in nodes.items:
+                self.logger.info(f"- {node.metadata.name}")
+        except Exception as e:
+            self.logger.error(f"Error listing nodes: {e}")
+
+    def _get_node_name(self) -> str:
+        """Get the node name with various fallback methods."""
+        # Try environment variable first
+        node_name = os.getenv('NODE_NAME')
+        if node_name:
+            self.logger.info(f"Using NODE_NAME from environment: {node_name}")
+            return node_name
+            
+        # Try hostname
+        try:
+            hostname = subprocess.check_output(['hostname']).decode().strip()
+            self.logger.info(f"Using hostname: {hostname}")
+            return hostname
+        except:
+            pass
+            
+        # Fallback to uname
+        node_name = os.uname().nodename
+        self.logger.info(f"Using uname nodename: {node_name}")
+        return node_name
 
     def get_gpu_metrics(self) -> Dict[str, Dict[str, float]]:
         """Get GPU metrics using rocm-smi."""
@@ -390,12 +422,30 @@ def main():
         port = int(os.environ.get('EXPORTER_PORT', 9400))
         collection_interval = int(os.environ.get('COLLECTION_INTERVAL', 300))
         
+        # Get node name from environment or prompt user
+        node_name = os.environ.get('NODE_NAME')
+        if not node_name:
+            # List available nodes
+            config.load_kube_config()
+            k8s_client = client.CoreV1Api()
+            nodes = k8s_client.list_node()
+            
+            logger.info("\nAvailable nodes in cluster:")
+            for node in nodes.items:
+                logger.info(f"- {node.metadata.name}")
+            
+            # Prompt for node name
+            logger.info("\nPlease set the NODE_NAME environment variable to one of the above nodes.")
+            logger.info("Example: export NODE_NAME=node1")
+            sys.exit(1)
+        
         # Additional environment variables for k8s configuration
         os.environ.setdefault('KUBERNETES_HOST', 'https://kubernetes.default.svc')
         os.environ.setdefault('KUBERNETES_SKIP_SSL_VERIFY', 'false')
 
         logger.info(f"Starting namespace-aware GPU exporter on port {port}")
         logger.info(f"Collection interval: {collection_interval} seconds")
+        logger.info(f"Using node name: {node_name}")
         
         start_http_server(port)
         exporter = K8sGPUExporter()
