@@ -69,19 +69,40 @@ class GPUPodMapper:
     def get_pod_gpu_mappings(self) -> Dict[str, Dict[str, str]]:
         """Get mappings of GPU devices to pods and namespaces."""
         try:
+            self.logger.info(f"Getting pod GPU mappings for node {os.uname().nodename}")
+            
+            # List all pods on this node
             pods = self.k8s_client.list_pod_for_all_namespaces(
                 field_selector=f"spec.nodeName={os.uname().nodename}"
             )
             
+            self.logger.info(f"Found {len(pods.items)} pods on this node")
+            
             gpu_mappings = {}
             for pod in pods.items:
+                self.logger.info(f"Checking pod: {pod.metadata.namespace}/{pod.metadata.name}")
+                
+                # Log pod's resource requests and limits
+                for container in pod.spec.containers:
+                    if container.resources:
+                        if hasattr(container.resources, 'limits') and container.resources.limits:
+                            self.logger.info(f"Resource limits: {container.resources.limits}")
+                        if hasattr(container.resources, 'requests') and container.resources.requests:
+                            self.logger.info(f"Resource requests: {container.resources.requests}")
+                
                 gpu_info = self._get_pod_gpu_info(pod)
                 if gpu_info:
+                    self.logger.info(f"Found GPU assignment for pod {pod.metadata.name}: {gpu_info}")
                     for gpu_id in gpu_info:
                         gpu_mappings[gpu_id] = {
                             'namespace': pod.metadata.namespace,
                             'pod': pod.metadata.name
                         }
+                        self.logger.info(f"Mapped GPU {gpu_id} to {pod.metadata.namespace}/{pod.metadata.name}")
+                else:
+                    self.logger.debug(f"No GPU assignment found for pod {pod.metadata.name}")
+            
+            self.logger.info(f"Final GPU mappings: {gpu_mappings}")
             return gpu_mappings
 
         except Exception as e:
@@ -92,19 +113,57 @@ class GPUPodMapper:
         """Extract GPU information from pod spec."""
         gpu_ids = []
         try:
+            # Check for AMD GPU resource requests
+            amd_gpu_resources = [
+                'amd.com/gpu',
+                'rocm.amd.com/gpu',
+                'amd.com/mi300x',
+                'amd.com/mi300',
+                'amd.com/mi200'
+            ]
+            
+            self.logger.debug(f"Checking pod {pod.metadata.name} for GPU assignments")
+            
             for container in pod.spec.containers:
-                if container.resources and container.resources.limits:
-                    for resource_name, value in container.resources.limits.items():
-                        if 'amd.com/gpu' in resource_name:
-                            gpu_ids.extend(self._parse_gpu_ids(container))
-                
+                # Check resource limits and requests
+                for resources in [getattr(container.resources, 'limits', {}), 
+                                getattr(container.resources, 'requests', {})]:
+                    if resources:
+                        for resource_name, value in resources.items():
+                            if any(gpu_type in resource_name.lower() for gpu_type in amd_gpu_resources):
+                                self.logger.info(f"Found AMD GPU resource: {resource_name} = {value} in pod {pod.metadata.name}")
+                                # Add number of GPUs based on resource count
+                                try:
+                                    num_gpus = int(value)
+                                    gpu_ids.extend([str(i) for i in range(len(gpu_ids), len(gpu_ids) + num_gpus)])
+                                except (ValueError, TypeError):
+                                    self.logger.warning(f"Invalid GPU resource value: {value}")
+
+                # Check environment variables
                 if container.env:
+                    gpu_env_vars = [
+                        'ROCR_VISIBLE_DEVICES',
+                        'GPU_DEVICE_ORDINAL',
+                        'HIP_VISIBLE_DEVICES',
+                        'CUDA_VISIBLE_DEVICES'  # Some apps use CUDA env vars with ROCm
+                    ]
+                    
                     for env in container.env:
-                        if env.name in ['ROCR_VISIBLE_DEVICES', 'GPU_DEVICE_ORDINAL']:
-                            if env.value:
-                                gpu_ids.extend(env.value.split(','))
+                        if env.name in gpu_env_vars and env.value:
+                            self.logger.info(f"Found GPU environment variable {env.name}={env.value} in pod {pod.metadata.name}")
+                            # Parse comma-separated GPU IDs
+                            try:
+                                gpu_list = [x.strip() for x in env.value.split(',') if x.strip()]
+                                gpu_ids.extend(gpu_list)
+                            except Exception as e:
+                                self.logger.warning(f"Error parsing GPU env var: {e}")
+
+            if gpu_ids:
+                self.logger.info(f"Pod {pod.metadata.name} is using GPUs: {gpu_ids}")
+            
         except Exception as e:
-            self.logger.error(f"Error parsing pod GPU info: {str(e)}")
+            self.logger.error(f"Error parsing pod GPU info: {str(e)}", exc_info=True)
+        
         return list(set(gpu_ids))
 
     def _parse_gpu_ids(self, container) -> List[str]:
