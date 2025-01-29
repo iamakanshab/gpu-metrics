@@ -162,26 +162,64 @@ class K8sGPUExporter:
     def get_gpu_metrics(self) -> Dict[str, Dict[str, float]]:
         """Get GPU metrics using rocm-smi."""
         try:
-            # Run rocm-smi to get GPU metrics
-            cmd = ["rocm-smi", "--showuse", "--showmemuse", "--showpower", "-j"]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            # Get GPU utilization
+            cmd_util = ["rocm-smi", "--showuse"]
+            result_util = subprocess.run(cmd_util, capture_output=True, text=True)
             
-            if result.returncode != 0:
-                self.logger.error(f"Error running rocm-smi: {result.stderr}")
+            # Get memory usage
+            cmd_mem = ["rocm-smi", "--showmemuse"]
+            result_mem = subprocess.run(cmd_mem, capture_output=True, text=True)
+            
+            # Get power usage
+            cmd_power = ["rocm-smi", "--showpower"]
+            result_power = subprocess.run(cmd_power, capture_output=True, text=True)
+            
+            if any(r.returncode != 0 for r in [result_util, result_mem, result_power]):
+                self.logger.error("Error running rocm-smi commands")
                 return {}
             
-            # Parse the JSON output
-            import json
-            data = json.loads(result.stdout)
-            
+            # Parse the output
             metrics = {}
-            for gpu_id, gpu_data in data.items():
-                metrics[gpu_id] = {
-                    'utilization': float(gpu_data.get('GPU use (%)', '0').strip('%')),
-                    'memory': float(gpu_data.get('GPU memory use (%)', '0').strip('%')),
-                    'power': float(gpu_data.get('Power (W)', '0').split()[0])
-                }
             
+            # Helper function to extract percentage from string
+            def extract_percentage(line: str) -> float:
+                try:
+                    return float(re.search(r'(\d+(?:\.\d+)?)\s*%', line).group(1))
+                except (AttributeError, ValueError):
+                    return 0.0
+            
+            # Helper function to extract power value
+            def extract_power(line: str) -> float:
+                try:
+                    return float(re.search(r'(\d+(?:\.\d+)?)\s*W', line).group(1))
+                except (AttributeError, ValueError):
+                    return 0.0
+            
+            # Parse GPU utilization
+            for line in result_util.stdout.splitlines():
+                if 'GPU' in line and '%' in line:
+                    gpu_id = str(len(metrics))  # Use counter as GPU ID
+                    metrics[gpu_id] = {'utilization': extract_percentage(line)}
+            
+            # Parse memory usage
+            gpu_counter = 0
+            for line in result_mem.stdout.splitlines():
+                if 'GPU' in line and '%' in line:
+                    gpu_id = str(gpu_counter)
+                    if gpu_id in metrics:
+                        metrics[gpu_id]['memory'] = extract_percentage(line)
+                    gpu_counter += 1
+            
+            # Parse power usage
+            gpu_counter = 0
+            for line in result_power.stdout.splitlines():
+                if 'GPU' in line and 'W' in line:
+                    gpu_id = str(gpu_counter)
+                    if gpu_id in metrics:
+                        metrics[gpu_id]['power'] = extract_power(line)
+                    gpu_counter += 1
+            
+            self.logger.info(f"Collected metrics for {len(metrics)} GPUs")
             return metrics
             
         except Exception as e:
