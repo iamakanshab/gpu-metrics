@@ -62,8 +62,9 @@ class K8sGPUMetrics:
         )
 
 class GPUPodMapper:
-    def __init__(self, k8s_client: client.CoreV1Api):
+    def __init__(self, k8s_client: client.CoreV1Api, node_name: str):
         self.k8s_client = k8s_client
+        self.current_node = node_name
         self.logger = logging.getLogger('k8s-gpu-exporter')
 
     def get_pod_gpu_mappings(self) -> Dict[str, Dict[str, str]]:
@@ -217,7 +218,7 @@ class K8sGPUExporter:
                 self.logger.info(f"Using explicit configuration with host: {k8s_host}")
         
         self.k8s_client = client.CoreV1Api()
-        self.gpu_mapper = GPUPodMapper(self.k8s_client)
+        self.gpu_mapper = GPUPodMapper(self.k8s_client, self.current_node)
         self.logger.info(f"Exporter initialized on node: {self.current_node}")
         
         # Print available nodes for debugging
