@@ -265,76 +265,162 @@ class K8sGPUExporter:
         self.logger.info(f"Using uname nodename: {node_name}")
         return node_name
 
-    def get_gpu_metrics(self) -> Dict[str, Dict[str, float]]:
-        """Get GPU metrics using rocm-smi."""
-        try:
-            # Get GPU utilization
-            cmd_util = ["rocm-smi", "--showuse"]
-            result_util = subprocess.run(cmd_util, capture_output=True, text=True)
-            
-            # Get memory usage
-            cmd_mem = ["rocm-smi", "--showmemuse"]
-            result_mem = subprocess.run(cmd_mem, capture_output=True, text=True)
-            
-            # Get power usage
-            cmd_power = ["rocm-smi", "--showpower"]
-            result_power = subprocess.run(cmd_power, capture_output=True, text=True)
-            
-            if any(r.returncode != 0 for r in [result_util, result_mem, result_power]):
-                self.logger.error("Error running rocm-smi commands")
-                return {}
-            
-            # Parse the output
-            metrics = {}
-            
-            # Helper function to extract percentage from string
-            def extract_percentage(line: str) -> float:
-                try:
-                    return float(re.search(r'(\d+(?:\.\d+)?)\s*%', line).group(1))
-                except (AttributeError, ValueError):
-                    return 0.0
-            
-            # Helper function to extract power value
-            def extract_power(line: str) -> float:
-                try:
-                    return float(re.search(r'(\d+(?:\.\d+)?)\s*W', line).group(1))
-                except (AttributeError, ValueError):
-                    return 0.0
-            
-            # Parse GPU utilization
-            gpu_counter = 0
-            for line in result_util.stdout.splitlines():
-                if 'GPU' in line and gpu_counter < 8:  # Only process 8 GPUs
-                    gpu_id = str(gpu_counter)
-                    metrics[gpu_id] = {'utilization': extract_percentage(line)}
-                    gpu_counter += 1
-            
-            # Parse memory usage
-            gpu_counter = 0
-            for line in result_mem.stdout.splitlines():
-                if 'GPU' in line and gpu_counter < 8:  # Only process 8 GPUs
-                    gpu_id = str(gpu_counter)
-                    if gpu_id not in metrics:
-                        metrics[gpu_id] = {}
-                    metrics[gpu_id]['memory'] = extract_percentage(line)
-                    gpu_counter += 1
-            
-            # Parse power usage
-            gpu_counter = 0
-            for line in result_power.stdout.splitlines():
-                if 'GPU' in line and gpu_counter < 8:  # Only process 8 GPUs
-                    gpu_id = str(gpu_counter)
-                    if gpu_id not in metrics:
-                        metrics[gpu_id] = {}
-                    metrics[gpu_id]['power'] = extract_power(line)
-                    gpu_counter += 1
-            
-            self.logger.info(f"Collected metrics for {len(metrics)} GPUs")
-            return metrics
-            
-        except Exception as e:
-            self.logger.error(f"Error getting GPU metrics: {str(e)}")
+def get_gpu_metrics(self) -> Dict[str, Dict[str, float]]:
+    """Get GPU metrics using rocm-smi."""
+    try:
+        # Get GPU utilization
+        cmd_util = ["rocm-smi", "--showuse"]
+        result_util = subprocess.run(cmd_util, capture_output=True, text=True)
+        
+        # Get memory usage
+        cmd_mem = ["rocm-smi", "--showmemuse"]
+        result_mem = subprocess.run(cmd_mem, capture_output=True, text=True)
+        
+        # Get power usage
+        cmd_power = ["rocm-smi", "--showpower"]
+        result_power = subprocess.run(cmd_power, capture_output=True, text=True)
+        
+        if any(r.returncode != 0 for r in [result_util, result_mem, result_power]):
+            self.logger.error("Error running rocm-smi commands")
             return {}
+        
+        # Parse the output
+        metrics = {}
+        
+        # Helper function to extract GPU usage percentage
+        def extract_gpu_usage(line: str) -> float:
+            try:
+                if 'GPU use (%)' in line:
+                    return float(line.split(':')[1].strip())
+                return 0.0
+            except (ValueError, IndexError):
+                return 0.0
+        
+        # Helper function to extract memory percentage
+        def extract_memory(line: str) -> float:
+            try:
+                if 'GPU Memory Allocated (VRAM%)' in line:
+                    return float(line.split(':')[1].strip())
+                return 0.0
+            except (ValueError, IndexError):
+                return 0.0
+                
+        # Helper function to extract power value
+        def extract_power(line: str) -> float:
+            try:
+                if 'Current Socket Graphics Package Power (W)' in line:
+                    return float(line.split(':')[1].strip().split()[0])
+                return 0.0
+            except (ValueError, IndexError):
+                return 0.0
+        
+        # Parse GPU utilization
+        current_gpu = None
+        for line in result_util.stdout.splitlines():
+            if line.startswith('GPU['):
+                current_gpu = line.split('[')[1].split(']')[0]
+                if current_gpu not in metrics:
+                    metrics[current_gpu] = {}
+            if current_gpu is not None and 'GPU use (%)' in line:
+                metrics[current_gpu]['utilization'] = extract_gpu_usage(line)
+        
+        # Parse memory usage
+        current_gpu = None
+        for line in result_mem.stdout.splitlines():
+            if line.startswith('GPU['):
+                current_gpu = line.split('[')[1].split(']')[0]
+                if current_gpu not in metrics:
+                    metrics[current_gpu] = {}
+            if current_gpu is not None and 'GPU Memory Allocated (VRAM%)' in line:
+                metrics[current_gpu]['memory'] = extract_memory(line)
+        
+        # Parse power usage
+        current_gpu = None
+        for line in result_power.stdout.splitlines():
+            if line.startswith('GPU['):
+                current_gpu = line.split('[')[1].split(']')[0]
+                if current_gpu not in metrics:
+                    metrics[current_gpu] = {}
+            if current_gpu is not None and 'Current Socket Graphics Package Power (W)' in line:
+                metrics[current_gpu]['power'] = extract_power(line)
+        
+        self.logger.info(f"Collected metrics for {len(metrics)} GPUs: {metrics}")
+        return metrics
+            
+    except Exception as e:
+        self.logger.error(f"Error getting GPU metrics: {str(e)}")
+        return {}
+        
+    # def get_gpu_metrics(self) -> Dict[str, Dict[str, float]]:
+    #     """Get GPU metrics using rocm-smi."""
+    #     try:
+    #         # Get GPU utilization
+    #         cmd_util = ["rocm-smi", "--showuse"]
+    #         result_util = subprocess.run(cmd_util, capture_output=True, text=True)
+            
+    #         # Get memory usage
+    #         cmd_mem = ["rocm-smi", "--showmemuse"]
+    #         result_mem = subprocess.run(cmd_mem, capture_output=True, text=True)
+            
+    #         # Get power usage
+    #         cmd_power = ["rocm-smi", "--showpower"]
+    #         result_power = subprocess.run(cmd_power, capture_output=True, text=True)
+            
+    #         if any(r.returncode != 0 for r in [result_util, result_mem, result_power]):
+    #             self.logger.error("Error running rocm-smi commands")
+    #             return {}
+            
+    #         # Parse the output
+    #         metrics = {}
+            
+    #         # Helper function to extract percentage from string
+    #         def extract_percentage(line: str) -> float:
+    #             try:
+    #                 return float(re.search(r'(\d+(?:\.\d+)?)\s*%', line).group(1))
+    #             except (AttributeError, ValueError):
+    #                 return 0.0
+            
+    #         # Helper function to extract power value
+    #         def extract_power(line: str) -> float:
+    #             try:
+    #                 return float(re.search(r'(\d+(?:\.\d+)?)\s*W', line).group(1))
+    #             except (AttributeError, ValueError):
+    #                 return 0.0
+            
+    #         # Parse GPU utilization
+    #         gpu_counter = 0
+    #         for line in result_util.stdout.splitlines():
+    #             if 'GPU' in line and gpu_counter < 8:  # Only process 8 GPUs
+    #                 gpu_id = str(gpu_counter)
+    #                 metrics[gpu_id] = {'utilization': extract_percentage(line)}
+    #                 gpu_counter += 1
+            
+    #         # Parse memory usage
+    #         gpu_counter = 0
+    #         for line in result_mem.stdout.splitlines():
+    #             if 'GPU' in line and gpu_counter < 8:  # Only process 8 GPUs
+    #                 gpu_id = str(gpu_counter)
+    #                 if gpu_id not in metrics:
+    #                     metrics[gpu_id] = {}
+    #                 metrics[gpu_id]['memory'] = extract_percentage(line)
+    #                 gpu_counter += 1
+            
+    #         # Parse power usage
+    #         gpu_counter = 0
+    #         for line in result_power.stdout.splitlines():
+    #             if 'GPU' in line and gpu_counter < 8:  # Only process 8 GPUs
+    #                 gpu_id = str(gpu_counter)
+    #                 if gpu_id not in metrics:
+    #                     metrics[gpu_id] = {}
+    #                 metrics[gpu_id]['power'] = extract_power(line)
+    #                 gpu_counter += 1
+            
+    #         self.logger.info(f"Collected metrics for {len(metrics)} GPUs")
+    #         return metrics
+            
+    #     except Exception as e:
+    #         self.logger.error(f"Error getting GPU metrics: {str(e)}")
+    #         return {}
 
     def update_metrics(self, gpu_metrics: Dict[str, Dict[str, float]]):
         """Update Prometheus metrics with namespace awareness."""
