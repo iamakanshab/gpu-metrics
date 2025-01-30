@@ -295,11 +295,22 @@ class K8sGPUExporter:
             # Function to get GPU index from line
             def get_gpu_index(line: str) -> Optional[str]:
                 try:
-                    if line.startswith('GPU['):
+                    if line.strip().startswith('GPU['):
                         return line.split('[')[1].split(']')[0]
                     return None
                 except Exception:
                     return None
+
+            # Function to safely extract number after colon
+            def extract_value_after_colon(line: str) -> float:
+                try:
+                    # Split by colon and get the last part
+                    value_str = line.split(':')[-1].strip()
+                    # Convert to float
+                    return float(value_str)
+                except Exception as e:
+                    self.logger.error(f"Error extracting value from line '{line}': {e}")
+                    return 0.0
 
             # Parse GPU utilization
             current_gpu = None
@@ -311,13 +322,10 @@ class K8sGPUExporter:
                         metrics[current_gpu] = {}
                     continue
                     
-                if current_gpu is not None and ': GPU use (%)' in line:
-                    try:
-                        value = float(line.split(': GPU use (%):')[1].strip())
-                        metrics[current_gpu]['utilization'] = value
-                        self.logger.info(f"Set utilization for GPU {current_gpu}: {value}")
-                    except Exception as e:
-                        self.logger.error(f"Error parsing utilization: {e}")
+                if current_gpu is not None and 'GPU use (%)' in line:
+                    value = extract_value_after_colon(line)
+                    metrics[current_gpu]['utilization'] = value
+                    self.logger.info(f"Set utilization for GPU {current_gpu}: {value}")
 
             # Parse memory usage
             current_gpu = None
@@ -328,14 +336,11 @@ class K8sGPUExporter:
                     if current_gpu not in metrics:
                         metrics[current_gpu] = {}
                     continue
-                    
-                if current_gpu is not None and ': GPU Memory Allocated (VRAM%)' in line:
-                    try:
-                        value = float(line.split(': GPU Memory Allocated (VRAM%):')[1].strip())
-                        metrics[current_gpu]['memory'] = value
-                        self.logger.info(f"Set memory for GPU {current_gpu}: {value}")
-                    except Exception as e:
-                        self.logger.error(f"Error parsing memory: {e}")
+                
+                if current_gpu is not None and 'GPU Memory Allocated (VRAM%)' in line:
+                    value = extract_value_after_colon(line)
+                    metrics[current_gpu]['memory'] = value
+                    self.logger.info(f"Set memory for GPU {current_gpu}: {value}")
 
             # Parse power usage
             current_gpu = None
@@ -346,14 +351,11 @@ class K8sGPUExporter:
                     if current_gpu not in metrics:
                         metrics[current_gpu] = {}
                     continue
-                    
-                if current_gpu is not None and ': Current Socket Graphics Package Power (W)' in line:
-                    try:
-                        value = float(line.split(': Current Socket Graphics Package Power (W):')[1].strip())
-                        metrics[current_gpu]['power'] = value
-                        self.logger.info(f"Set power for GPU {current_gpu}: {value}")
-                    except Exception as e:
-                        self.logger.error(f"Error parsing power: {e}")
+                
+                if current_gpu is not None and 'Current Socket Graphics Package Power (W)' in line:
+                    value = extract_value_after_colon(line)
+                    metrics[current_gpu]['power'] = value
+                    self.logger.info(f"Set power for GPU {current_gpu}: {value}")
 
             self.logger.info(f"Final collected metrics: {metrics}")
             return metrics
@@ -362,8 +364,6 @@ class K8sGPUExporter:
             self.logger.error(f"Error getting GPU metrics: {str(e)}")
             self.logger.error(traceback.format_exc())
             return {}
-
-        
 
     def update_metrics(self, gpu_metrics: Dict[str, Dict[str, float]]):
         """Update Prometheus metrics with namespace awareness."""
