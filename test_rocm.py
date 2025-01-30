@@ -1,4 +1,4 @@
- import subprocess
+import subprocess
 import re
 
 def test_rocm_parsing():
