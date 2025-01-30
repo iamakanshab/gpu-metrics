@@ -282,75 +282,71 @@ class K8sGPUExporter:
             # Parse the output
             metrics = {}
             
-            # Helper function to get GPU ID from line
-            def get_gpu_id(line: str) -> Optional[str]:
-                if 'GPU[' in line:
-                    try:
-                        return line.split('[')[1].split(']')[0]
-                    except IndexError:
-                        return None
-                return None
-
-            current_gpu = None
-            
             # Parse GPU utilization
+            current_gpu = None
+            self.logger.info("Parsing GPU utilization...")
             for line in result_util.stdout.splitlines():
-                gpu_id = get_gpu_id(line)
-                if gpu_id is not None:
-                    current_gpu = gpu_id
+                self.logger.info(f"Processing line: '{line}'")
+                if 'GPU[' in line:
+                    current_gpu = line.split('[')[1].split(']')[0]
                     if current_gpu not in metrics:
                         metrics[current_gpu] = {}
-                    continue
+                    self.logger.info(f"Found GPU: {current_gpu}")
+                elif current_gpu is not None and 'GPU use (%)' in line:
+                    parts = line.split(':')
+                    if len(parts) >= 2:
+                        try:
+                            value = float(parts[-1].strip())
+                            metrics[current_gpu]['utilization'] = value
+                            self.logger.info(f"Set utilization for GPU {current_gpu} to {value}%")
+                        except ValueError as e:
+                            self.logger.error(f"Error converting value: {e}")
 
-                if current_gpu is not None and ': GPU use (%):' in line:
-                    try:
-                        value = float(line.split(':')[-1].strip())
-                        metrics[current_gpu]['utilization'] = value
-                        self.logger.info(f"GPU {current_gpu} utilization: {value}%")
-                    except (ValueError, IndexError) as e:
-                        self.logger.error(f"Error parsing utilization from line '{line}': {e}")
-            
             # Parse memory usage
             current_gpu = None
+            self.logger.info("Parsing memory usage...")
             for line in result_mem.stdout.splitlines():
-                gpu_id = get_gpu_id(line)
-                if gpu_id is not None:
-                    current_gpu = gpu_id
+                self.logger.info(f"Processing line: '{line}'")
+                if 'GPU[' in line:
+                    current_gpu = line.split('[')[1].split(']')[0]
                     if current_gpu not in metrics:
                         metrics[current_gpu] = {}
-                    continue
+                    self.logger.info(f"Found GPU: {current_gpu}")
+                elif current_gpu is not None and 'GPU Memory Allocated (VRAM%)' in line:
+                    parts = line.split(':')
+                    if len(parts) >= 2:
+                        try:
+                            value = float(parts[-1].strip())
+                            metrics[current_gpu]['memory'] = value
+                            self.logger.info(f"Set memory for GPU {current_gpu} to {value}%")
+                        except ValueError as e:
+                            self.logger.error(f"Error converting value: {e}")
 
-                if current_gpu is not None and ': GPU Memory Allocated (VRAM%):' in line:
-                    try:
-                        value = float(line.split(':')[-1].strip())
-                        metrics[current_gpu]['memory'] = value
-                        self.logger.info(f"GPU {current_gpu} memory: {value}%")
-                    except (ValueError, IndexError) as e:
-                        self.logger.error(f"Error parsing memory from line '{line}': {e}")
-            
             # Parse power usage
             current_gpu = None
+            self.logger.info("Parsing power usage...")
             for line in result_power.stdout.splitlines():
-                gpu_id = get_gpu_id(line)
-                if gpu_id is not None:
-                    current_gpu = gpu_id
+                self.logger.info(f"Processing line: '{line}'")
+                if 'GPU[' in line:
+                    current_gpu = line.split('[')[1].split(']')[0]
                     if current_gpu not in metrics:
                         metrics[current_gpu] = {}
-                    continue
+                    self.logger.info(f"Found GPU: {current_gpu}")
+                elif current_gpu is not None and 'Current Socket Graphics Package Power (W)' in line:
+                    parts = line.split(':')
+                    if len(parts) >= 2:
+                        try:
+                            value = float(parts[-1].strip())
+                            metrics[current_gpu]['power'] = value
+                            self.logger.info(f"Set power for GPU {current_gpu} to {value}W")
+                        except ValueError as e:
+                            self.logger.error(f"Error converting value: {e}")
 
-                if current_gpu is not None and ': Current Socket Graphics Package Power (W):' in line:
-                    try:
-                        value = float(line.split(':')[-1].strip())
-                        metrics[current_gpu]['power'] = value
-                        self.logger.info(f"GPU {current_gpu} power: {value}W")
-                    except (ValueError, IndexError) as e:
-                        self.logger.error(f"Error parsing power from line '{line}': {e}")
-            
-            # Log final metrics
-            self.logger.info("Collected metrics:")
+            # Log complete metrics
+            self.logger.info("Final collected metrics:")
             for gpu_id, values in metrics.items():
                 self.logger.info(f"GPU {gpu_id}: {values}")
-            
+
             return metrics
                 
         except Exception as e:
@@ -508,5 +504,63 @@ def main():
         logger.error(traceback.format_exc())
         sys.exit(1)
 
+def test_parsing():
+    """Test function to verify parsing logic."""
+    test_util = """============================ ROCm System Management Interface ============================
+=================================== % time GPU is busy ===================================
+GPU[0]          : GPU use (%): 0
+GPU[0]          : GFX Activity: 156143431
+GPU[1]          : GPU use (%): 36
+GPU[1]          : GFX Activity: 183247150"""
+
+    test_mem = """============================ ROCm System Management Interface ============================
+=================================== Current Memory Use ===================================
+GPU[0]          : GPU Memory Allocated (VRAM%): 70
+GPU[0]          : Memory Activity: 3418685
+GPU[1]          : GPU Memory Allocated (VRAM%): 82"""
+
+    test_power = """============================ ROCm System Management Interface ============================
+=================================== Power Consumption ====================================
+GPU[0]          : Current Socket Graphics Package Power (W): 147.0
+GPU[1]          : Current Socket Graphics Package Power (W): 141.0"""
+
+    logger = logging.getLogger('test')
+    logger.setLevel(logging.INFO)
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    logger.addHandler(handler)
+
+    class TestExporter:
+        def __init__(self):
+            self.logger = logger
+
+    exporter = TestExporter()
+    old_stdout = sys.stdout
+    sys.stdout = open(os.devnull, 'w')  # Suppress print statements
+
+    try:
+        # Mock the subprocess.run results
+        class MockResult:
+            def __init__(self, output):
+                self.stdout = output
+                self.returncode = 0
+
+        with patch('subprocess.run') as mock_run:
+            mock_run.side_effect = [
+                MockResult(test_util),
+                MockResult(test_mem),
+                MockResult(test_power)
+            ]
+            
+            metrics = exporter.get_gpu_metrics()
+            print("\nParsed Metrics:")
+            print(json.dumps(metrics, indent=2))
+            
+    finally:
+        sys.stdout = old_stdout
+
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "--test":
+        test_parsing()
+    else:
+        main()
