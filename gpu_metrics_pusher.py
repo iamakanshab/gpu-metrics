@@ -8,7 +8,7 @@ from typing import Dict
 from base64 import b64encode
 from datetime import datetime
 
-# Reuse existing GPU metrics collection classes
+# Reuse your existing GPU metrics collection classes
 from k8s_gpu_metrics import K8sGPUMetrics, GPUPodMapper, K8sGPUExporter
 
 class GPUMetricsPusher:
