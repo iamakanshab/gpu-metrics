@@ -263,21 +263,27 @@ class K8sGPUExporter:
         node_name = os.uname().nodename
         self.logger.info(f"Using uname nodename: {node_name}")
         return node_name
-
+    
     def get_gpu_metrics(self) -> Dict[str, Dict[str, float]]:
         """Get GPU metrics using rocm-smi."""
         try:
             # Get GPU utilization
             cmd_util = ["rocm-smi", "--showuse"]
             result_util = subprocess.run(cmd_util, capture_output=True, text=True)
+            self.logger.info("GPU Utilization Raw Output:")
+            self.logger.info(result_util.stdout)
             
             # Get memory usage
             cmd_mem = ["rocm-smi", "--showmemuse"]
             result_mem = subprocess.run(cmd_mem, capture_output=True, text=True)
+            self.logger.info("Memory Usage Raw Output:")
+            self.logger.info(result_mem.stdout)
             
             # Get power usage
             cmd_power = ["rocm-smi", "--showpower"]
             result_power = subprocess.run(cmd_power, capture_output=True, text=True)
+            self.logger.info("Power Usage Raw Output:")
+            self.logger.info(result_power.stdout)
             
             if any(r.returncode != 0 for r in [result_util, result_mem, result_power]):
                 self.logger.error("Error running rocm-smi commands")
@@ -285,70 +291,79 @@ class K8sGPUExporter:
             
             # Parse the output
             metrics = {}
-            
-            # Helper function to extract GPU usage percentage
-            def extract_gpu_usage(line: str) -> float:
+
+            # Function to get GPU index from line
+            def get_gpu_index(line: str) -> Optional[str]:
                 try:
-                    if 'GPU use (%)' in line:
-                        return float(line.split(':')[1].strip())
-                    return 0.0
-                except (ValueError, IndexError):
-                    return 0.0
-            
-            # Helper function to extract memory percentage
-            def extract_memory(line: str) -> float:
-                try:
-                    if 'GPU Memory Allocated (VRAM%)' in line:
-                        return float(line.split(':')[1].strip())
-                    return 0.0
-                except (ValueError, IndexError):
-                    return 0.0
-                    
-            # Helper function to extract power value
-            def extract_power(line: str) -> float:
-                try:
-                    if 'Current Socket Graphics Package Power (W)' in line:
-                        return float(line.split(':')[1].strip().split()[0])
-                    return 0.0
-                except (ValueError, IndexError):
-                    return 0.0
-            
+                    if line.startswith('GPU['):
+                        return line.split('[')[1].split(']')[0]
+                    return None
+                except Exception:
+                    return None
+
             # Parse GPU utilization
             current_gpu = None
             for line in result_util.stdout.splitlines():
-                if line.startswith('GPU['):
-                    current_gpu = line.split('[')[1].split(']')[0]
+                gpu_idx = get_gpu_index(line)
+                if gpu_idx is not None:
+                    current_gpu = gpu_idx
                     if current_gpu not in metrics:
                         metrics[current_gpu] = {}
-                if current_gpu is not None and 'GPU use (%)' in line:
-                    metrics[current_gpu]['utilization'] = extract_gpu_usage(line)
-            
+                    continue
+                    
+                if current_gpu is not None and ': GPU use (%)' in line:
+                    try:
+                        value = float(line.split(': GPU use (%):')[1].strip())
+                        metrics[current_gpu]['utilization'] = value
+                        self.logger.info(f"Set utilization for GPU {current_gpu}: {value}")
+                    except Exception as e:
+                        self.logger.error(f"Error parsing utilization: {e}")
+
             # Parse memory usage
             current_gpu = None
             for line in result_mem.stdout.splitlines():
-                if line.startswith('GPU['):
-                    current_gpu = line.split('[')[1].split(']')[0]
+                gpu_idx = get_gpu_index(line)
+                if gpu_idx is not None:
+                    current_gpu = gpu_idx
                     if current_gpu not in metrics:
                         metrics[current_gpu] = {}
-                if current_gpu is not None and 'GPU Memory Allocated (VRAM%)' in line:
-                    metrics[current_gpu]['memory'] = extract_memory(line)
-            
+                    continue
+                    
+                if current_gpu is not None and ': GPU Memory Allocated (VRAM%)' in line:
+                    try:
+                        value = float(line.split(': GPU Memory Allocated (VRAM%):')[1].strip())
+                        metrics[current_gpu]['memory'] = value
+                        self.logger.info(f"Set memory for GPU {current_gpu}: {value}")
+                    except Exception as e:
+                        self.logger.error(f"Error parsing memory: {e}")
+
             # Parse power usage
             current_gpu = None
             for line in result_power.stdout.splitlines():
-                if line.startswith('GPU['):
-                    current_gpu = line.split('[')[1].split(']')[0]
+                gpu_idx = get_gpu_index(line)
+                if gpu_idx is not None:
+                    current_gpu = gpu_idx
                     if current_gpu not in metrics:
                         metrics[current_gpu] = {}
-                if current_gpu is not None and 'Current Socket Graphics Package Power (W)' in line:
-                    metrics[current_gpu]['power'] = extract_power(line)
-            
-            self.logger.info(f"Collected metrics for {len(metrics)} GPUs: {metrics}")
+                    continue
+                    
+                if current_gpu is not None and ': Current Socket Graphics Package Power (W)' in line:
+                    try:
+                        value = float(line.split(': Current Socket Graphics Package Power (W):')[1].strip())
+                        metrics[current_gpu]['power'] = value
+                        self.logger.info(f"Set power for GPU {current_gpu}: {value}")
+                    except Exception as e:
+                        self.logger.error(f"Error parsing power: {e}")
+
+            self.logger.info(f"Final collected metrics: {metrics}")
             return metrics
                 
         except Exception as e:
             self.logger.error(f"Error getting GPU metrics: {str(e)}")
+            self.logger.error(traceback.format_exc())
             return {}
+
+        
 
     def update_metrics(self, gpu_metrics: Dict[str, Dict[str, float]]):
         """Update Prometheus metrics with namespace awareness."""
@@ -407,7 +422,7 @@ class K8sGPUExporter:
             self.metrics.collection_errors.labels(type='update_metrics').inc()
 
     def _get_namespace_metrics(self, gpu_metrics: Dict[str, Dict[str, float]], 
-                             gpu_mappings: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, float]]:
+                                gpu_mappings: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, float]]:
         """Aggregate metrics per namespace."""
         namespace_metrics = {}
         
