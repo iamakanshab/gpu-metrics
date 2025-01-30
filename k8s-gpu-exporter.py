@@ -282,38 +282,69 @@ class K8sGPUExporter:
             # Parse the output
             metrics = {}
             
+            # Helper function to get GPU ID from line
+            def get_gpu_id(line: str) -> Optional[str]:
+                if 'GPU[' in line:
+                    try:
+                        return line.split('[')[1].split(']')[0]
+                    except IndexError:
+                        return None
+                return None
+
+            current_gpu = None
+            
             # Parse GPU utilization
             for line in result_util.stdout.splitlines():
-                if 'GPU[' in line:
-                    gpu_id = line.split('[')[1].split(']')[0]
-                    if gpu_id not in metrics:
-                        metrics[gpu_id] = {}
-                    if 'GPU use (%)' in line:
-                        value = float(line.split(':')[1].strip())
-                        metrics[gpu_id]['utilization'] = value
-                        self.logger.debug(f"GPU {gpu_id} utilization: {value}%")
+                gpu_id = get_gpu_id(line)
+                if gpu_id is not None:
+                    current_gpu = gpu_id
+                    if current_gpu not in metrics:
+                        metrics[current_gpu] = {}
+                    continue
+
+                if current_gpu is not None and ': GPU use (%):' in line:
+                    try:
+                        value = float(line.split(':')[-1].strip())
+                        metrics[current_gpu]['utilization'] = value
+                        self.logger.info(f"GPU {current_gpu} utilization: {value}%")
+                    except (ValueError, IndexError) as e:
+                        self.logger.error(f"Error parsing utilization from line '{line}': {e}")
             
             # Parse memory usage
+            current_gpu = None
             for line in result_mem.stdout.splitlines():
-                if 'GPU[' in line:
-                    gpu_id = line.split('[')[1].split(']')[0]
-                    if gpu_id not in metrics:
-                        metrics[gpu_id] = {}
-                    if 'GPU Memory Allocated (VRAM%)' in line:
-                        value = float(line.split(':')[1].strip())
-                        metrics[gpu_id]['memory'] = value
-                        self.logger.debug(f"GPU {gpu_id} memory: {value}%")
+                gpu_id = get_gpu_id(line)
+                if gpu_id is not None:
+                    current_gpu = gpu_id
+                    if current_gpu not in metrics:
+                        metrics[current_gpu] = {}
+                    continue
+
+                if current_gpu is not None and ': GPU Memory Allocated (VRAM%):' in line:
+                    try:
+                        value = float(line.split(':')[-1].strip())
+                        metrics[current_gpu]['memory'] = value
+                        self.logger.info(f"GPU {current_gpu} memory: {value}%")
+                    except (ValueError, IndexError) as e:
+                        self.logger.error(f"Error parsing memory from line '{line}': {e}")
             
             # Parse power usage
+            current_gpu = None
             for line in result_power.stdout.splitlines():
-                if 'GPU[' in line:
-                    gpu_id = line.split('[')[1].split(']')[0]
-                    if gpu_id not in metrics:
-                        metrics[gpu_id] = {}
-                    if 'Current Socket Graphics Package Power (W)' in line:
-                        value = float(line.split(':')[1].strip())
-                        metrics[gpu_id]['power'] = value
-                        self.logger.debug(f"GPU {gpu_id} power: {value}W")
+                gpu_id = get_gpu_id(line)
+                if gpu_id is not None:
+                    current_gpu = gpu_id
+                    if current_gpu not in metrics:
+                        metrics[current_gpu] = {}
+                    continue
+
+                if current_gpu is not None and ': Current Socket Graphics Package Power (W):' in line:
+                    try:
+                        value = float(line.split(':')[-1].strip())
+                        metrics[current_gpu]['power'] = value
+                        self.logger.info(f"GPU {current_gpu} power: {value}W")
+                    except (ValueError, IndexError) as e:
+                        self.logger.error(f"Error parsing power from line '{line}': {e}")
             
             # Log final metrics
             self.logger.info("Collected metrics:")
