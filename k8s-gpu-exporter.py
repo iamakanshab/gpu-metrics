@@ -350,78 +350,22 @@ def get_gpu_metrics(self) -> Dict[str, Dict[str, float]]:
     except Exception as e:
         self.logger.error(f"Error getting GPU metrics: {str(e)}")
         return {}
-        
-    # def get_gpu_metrics(self) -> Dict[str, Dict[str, float]]:
-    #     """Get GPU metrics using rocm-smi."""
-    #     try:
-    #         # Get GPU utilization
-    #         cmd_util = ["rocm-smi", "--showuse"]
-    #         result_util = subprocess.run(cmd_util, capture_output=True, text=True)
-            
-    #         # Get memory usage
-    #         cmd_mem = ["rocm-smi", "--showmemuse"]
-    #         result_mem = subprocess.run(cmd_mem, capture_output=True, text=True)
-            
-    #         # Get power usage
-    #         cmd_power = ["rocm-smi", "--showpower"]
-    #         result_power = subprocess.run(cmd_power, capture_output=True, text=True)
-            
-    #         if any(r.returncode != 0 for r in [result_util, result_mem, result_power]):
-    #             self.logger.error("Error running rocm-smi commands")
-    #             return {}
-            
-    #         # Parse the output
-    #         metrics = {}
-            
-    #         # Helper function to extract percentage from string
-    #         def extract_percentage(line: str) -> float:
-    #             try:
-    #                 return float(re.search(r'(\d+(?:\.\d+)?)\s*%', line).group(1))
-    #             except (AttributeError, ValueError):
-    #                 return 0.0
-            
-    #         # Helper function to extract power value
-    #         def extract_power(line: str) -> float:
-    #             try:
-    #                 return float(re.search(r'(\d+(?:\.\d+)?)\s*W', line).group(1))
-    #             except (AttributeError, ValueError):
-    #                 return 0.0
-            
-    #         # Parse GPU utilization
-    #         gpu_counter = 0
-    #         for line in result_util.stdout.splitlines():
-    #             if 'GPU' in line and gpu_counter < 8:  # Only process 8 GPUs
-    #                 gpu_id = str(gpu_counter)
-    #                 metrics[gpu_id] = {'utilization': extract_percentage(line)}
-    #                 gpu_counter += 1
-            
-    #         # Parse memory usage
-    #         gpu_counter = 0
-    #         for line in result_mem.stdout.splitlines():
-    #             if 'GPU' in line and gpu_counter < 8:  # Only process 8 GPUs
-    #                 gpu_id = str(gpu_counter)
-    #                 if gpu_id not in metrics:
-    #                     metrics[gpu_id] = {}
-    #                 metrics[gpu_id]['memory'] = extract_percentage(line)
-    #                 gpu_counter += 1
-            
-    #         # Parse power usage
-    #         gpu_counter = 0
-    #         for line in result_power.stdout.splitlines():
-    #             if 'GPU' in line and gpu_counter < 8:  # Only process 8 GPUs
-    #                 gpu_id = str(gpu_counter)
-    #                 if gpu_id not in metrics:
-    #                     metrics[gpu_id] = {}
-    #                 metrics[gpu_id]['power'] = extract_power(line)
-    #                 gpu_counter += 1
-            
-    #         self.logger.info(f"Collected metrics for {len(metrics)} GPUs")
-    #         return metrics
-            
-    #     except Exception as e:
-    #         self.logger.error(f"Error getting GPU metrics: {str(e)}")
-    #         return {}
 
+def collect_metrics(self):
+    """Collect and update GPU metrics."""
+    try:
+        self.logger.info("Starting metrics collection...")
+        gpu_metrics = self.get_gpu_metrics()
+        if gpu_metrics:
+            self.update_metrics(gpu_metrics)
+            self.logger.info("Metrics collection completed successfully")
+        else:
+            self.logger.error("Failed to collect GPU metrics")
+    except Exception as e:
+        self.logger.error(f"Error in collect_metrics: {e}")
+        self.metrics.collection_errors.labels(type='collect_metrics').inc()   
+              return 0.0
+            
     def update_metrics(self, gpu_metrics: Dict[str, Dict[str, float]]):
         """Update Prometheus metrics with namespace awareness."""
         try:
