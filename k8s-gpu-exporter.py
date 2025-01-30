@@ -270,94 +270,56 @@ class K8sGPUExporter:
             # Get GPU utilization
             cmd_util = ["rocm-smi", "--showuse"]
             result_util = subprocess.run(cmd_util, capture_output=True, text=True)
-            self.logger.info("GPU Utilization Raw Output:")
-            self.logger.info(result_util.stdout)
             
             # Get memory usage
             cmd_mem = ["rocm-smi", "--showmemuse"]
             result_mem = subprocess.run(cmd_mem, capture_output=True, text=True)
-            self.logger.info("Memory Usage Raw Output:")
-            self.logger.info(result_mem.stdout)
             
             # Get power usage
             cmd_power = ["rocm-smi", "--showpower"]
             result_power = subprocess.run(cmd_power, capture_output=True, text=True)
-            self.logger.info("Power Usage Raw Output:")
-            self.logger.info(result_power.stdout)
-            
-            if any(r.returncode != 0 for r in [result_util, result_mem, result_power]):
-                self.logger.error("Error running rocm-smi commands")
-                return {}
             
             # Parse the output
             metrics = {}
-
-            # Function to get GPU index from line
-            def get_gpu_index(line: str) -> Optional[str]:
-                try:
-                    if line.strip().startswith('GPU['):
-                        return line.split('[')[1].split(']')[0]
-                    return None
-                except Exception:
-                    return None
-
-            # Function to safely extract number after colon
-            def extract_value_after_colon(line: str) -> float:
-                try:
-                    # Split by colon and get the last part
-                    value_str = line.split(':')[-1].strip()
-                    # Convert to float
-                    return float(value_str)
-                except Exception as e:
-                    self.logger.error(f"Error extracting value from line '{line}': {e}")
-                    return 0.0
-
+            
             # Parse GPU utilization
-            current_gpu = None
             for line in result_util.stdout.splitlines():
-                gpu_idx = get_gpu_index(line)
-                if gpu_idx is not None:
-                    current_gpu = gpu_idx
-                    if current_gpu not in metrics:
-                        metrics[current_gpu] = {}
-                    continue
-                    
-                if current_gpu is not None and 'GPU use (%)' in line:
-                    value = extract_value_after_colon(line)
-                    metrics[current_gpu]['utilization'] = value
-                    self.logger.info(f"Set utilization for GPU {current_gpu}: {value}")
-
+                if 'GPU[' in line:
+                    gpu_id = line.split('[')[1].split(']')[0]
+                    if gpu_id not in metrics:
+                        metrics[gpu_id] = {}
+                    if 'GPU use (%)' in line:
+                        value = float(line.split(':')[1].strip())
+                        metrics[gpu_id]['utilization'] = value
+                        self.logger.debug(f"GPU {gpu_id} utilization: {value}%")
+            
             # Parse memory usage
-            current_gpu = None
             for line in result_mem.stdout.splitlines():
-                gpu_idx = get_gpu_index(line)
-                if gpu_idx is not None:
-                    current_gpu = gpu_idx
-                    if current_gpu not in metrics:
-                        metrics[current_gpu] = {}
-                    continue
-                
-                if current_gpu is not None and 'GPU Memory Allocated (VRAM%)' in line:
-                    value = extract_value_after_colon(line)
-                    metrics[current_gpu]['memory'] = value
-                    self.logger.info(f"Set memory for GPU {current_gpu}: {value}")
-
+                if 'GPU[' in line:
+                    gpu_id = line.split('[')[1].split(']')[0]
+                    if gpu_id not in metrics:
+                        metrics[gpu_id] = {}
+                    if 'GPU Memory Allocated (VRAM%)' in line:
+                        value = float(line.split(':')[1].strip())
+                        metrics[gpu_id]['memory'] = value
+                        self.logger.debug(f"GPU {gpu_id} memory: {value}%")
+            
             # Parse power usage
-            current_gpu = None
             for line in result_power.stdout.splitlines():
-                gpu_idx = get_gpu_index(line)
-                if gpu_idx is not None:
-                    current_gpu = gpu_idx
-                    if current_gpu not in metrics:
-                        metrics[current_gpu] = {}
-                    continue
-                
-                if current_gpu is not None and 'Current Socket Graphics Package Power (W)' in line:
-                    value = extract_value_after_colon(line)
-                    metrics[current_gpu]['power'] = value
-                    self.logger.info(f"Set power for GPU {current_gpu}: {value}")
-
-            self.logger.info(f"Final collected metrics: {metrics}")
+                if 'GPU[' in line:
+                    gpu_id = line.split('[')[1].split(']')[0]
+                    if gpu_id not in metrics:
+                        metrics[gpu_id] = {}
+                    if 'Current Socket Graphics Package Power (W)' in line:
+                        value = float(line.split(':')[1].strip())
+                        metrics[gpu_id]['power'] = value
+                        self.logger.debug(f"GPU {gpu_id} power: {value}W")
+            
+            # Log final metrics
+            self.logger.info("Collected metrics:")
+            for gpu_id, values in metrics.items():
+                self.logger.info(f"GPU {gpu_id}: {values}")
+            
             return metrics
                 
         except Exception as e:
@@ -378,7 +340,9 @@ class K8sGPUExporter:
                     namespace = gpu_mappings[gpu_id]['namespace']
                     pod_name = gpu_mappings[gpu_id]['pod']
                 
+                # Log each metric update
                 if 'utilization' in metrics:
+                    self.logger.info(f"Setting utilization for GPU {gpu_id}: {metrics['utilization']}%")
                     self.metrics.gpu_utilization.labels(
                         node=self.current_node,
                         gpu_id=gpu_id,
@@ -387,6 +351,7 @@ class K8sGPUExporter:
                     ).set(metrics['utilization'])
                 
                 if 'memory' in metrics:
+                    self.logger.info(f"Setting memory for GPU {gpu_id}: {metrics['memory']}%")
                     self.metrics.gpu_memory.labels(
                         node=self.current_node,
                         gpu_id=gpu_id,
@@ -395,6 +360,7 @@ class K8sGPUExporter:
                     ).set(metrics['memory'])
                 
                 if 'power' in metrics:
+                    self.logger.info(f"Setting power for GPU {gpu_id}: {metrics['power']}W")
                     self.metrics.gpu_power.labels(
                         node=self.current_node,
                         gpu_id=gpu_id,
