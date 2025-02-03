@@ -1,26 +1,34 @@
 #!/usr/bin/env python3
 
-# Standard library imports
 import logging
 import os
 import sys
 import time
 import traceback
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
-# Third-party imports
 from kubernetes import client, config
-from kubernetes.config import config_exception
-from prometheus_client import start_http_server, Gauge, Counter, Summary
-import subprocess
-import re
+from prometheus_client import start_http_server, Gauge, Counter
 
-class K8sGPUMetrics:
+@dataclass
+class GPUMetric:
+    """Data class to hold GPU metrics"""
+    utilization: float = 0.0
+    memory: float = 0.0
+    power: float = 0.0
+
+@dataclass
+class NamespaceMetric:
+    """Data class to hold namespace-level metrics"""
+    utilization: float = 0.0
+    memory: float = 0.0
+    gpu_count: int = 0
+
+class PrometheusMetrics:
+    """Class to manage Prometheus metrics"""
     def __init__(self):
-        self.logger = logging.getLogger('k8s-gpu-exporter')
-        self.logger.info("Initializing metrics with namespace support...")
-        
-        # Basic GPU metrics with namespace label
+        # GPU-level metrics
         self.gpu_utilization = Gauge(
             'k8s_gpu_utilization', 
             'GPU utilization percentage',
@@ -37,7 +45,7 @@ class K8sGPUMetrics:
             ['node', 'gpu_id', 'namespace', 'pod']
         )
         
-        # Namespace-specific aggregated metrics
+        # Namespace-level metrics
         self.namespace_gpu_utilization = Gauge(
             'k8s_namespace_gpu_utilization_total',
             'Total GPU utilization percentage per namespace',
@@ -61,501 +69,228 @@ class K8sGPUMetrics:
             ['type']
         )
 
-class GPUPodMapper:
-    def __init__(self, k8s_client: client.CoreV1Api, node_name: str):
-        self.k8s_client = k8s_client
-        self.current_node = node_name
-        self.logger = logging.getLogger('k8s-gpu-exporter')
-        
-        # Static mapping of PCI bus IDs to indices
-        self.bus_to_idx = {
-            '0000:05:00.0': '0',
-            '0000:26:00.0': '1',
-            '0000:46:00.0': '2',
-            '0000:65:00.0': '3',
-            '0000:85:00.0': '4',
-            '0000:a6:00.0': '5',
-            '0000:c6:00.0': '6',
-            '0000:e5:00.0': '7'
-        }
-        
-        self.idx_to_bus = {v: k for k, v in self.bus_to_idx.items()}
-
-    def get_pod_gpu_mappings(self) -> Dict[str, Dict[str, str]]:
-        """Get mappings of GPU devices to pods and namespaces."""
-        try:
-            self.logger.info(f"Getting pod GPU mappings for node {self.current_node}")
-            
-            # List all pods on this node
-            pods = self.k8s_client.list_pod_for_all_namespaces(
-                field_selector=f"spec.nodeName={self.current_node}"
-            )
-            
-            self.logger.info(f"Found {len(pods.items)} pods on this node")
-            
-            gpu_mappings = {}
-            for pod in pods.items:
-                self.logger.info(f"Checking pod: {pod.metadata.namespace}/{pod.metadata.name}")
-                
-                # Log pod's resource requests and limits
-                for container in pod.spec.containers:
-                    if container.resources:
-                        if hasattr(container.resources, 'limits') and container.resources.limits:
-                            self.logger.info(f"Resource limits: {container.resources.limits}")
-                        if hasattr(container.resources, 'requests') and container.resources.requests:
-                            self.logger.info(f"Resource requests: {container.resources.requests}")
-                
-                gpu_info = self._get_pod_gpu_info(pod)
-                if gpu_info:
-                    self.logger.info(f"Found GPU assignment for pod {pod.metadata.name}: {gpu_info}")
-                    for gpu_id in gpu_info:
-                        gpu_mappings[gpu_id] = {
-                            'namespace': pod.metadata.namespace,
-                            'pod': pod.metadata.name
-                        }
-                        self.logger.info(f"Mapped GPU {gpu_id} to {pod.metadata.namespace}/{pod.metadata.name}")
-                else:
-                    self.logger.debug(f"No GPU assignment found for pod {pod.metadata.name}")
-            
-            self.logger.info(f"Final GPU mappings: {gpu_mappings}")
-            return gpu_mappings
-        except Exception as e:
-            self.logger.error(f"Error getting pod GPU mappings: {str(e)}")
-            return {}
-
-    def _get_pod_gpu_info(self, pod) -> List[str]:
-        """Extract GPU information from pod spec."""
-        gpu_ids = []
-        try:
-            # Check for AMD GPU resource requests
-            amd_gpu_resources = [
-                'amd.com/gpu',
-                'rocm.amd.com/gpu',
-                'amd.com/mi300x',
-                'amd.com/mi300',
-                'amd.com/mi200'
-            ]
-            
-            self.logger.debug(f"Checking pod {pod.metadata.name} for GPU assignments")
-            
-            for container in pod.spec.containers:
-                # Check resource limits and requests
-                for resources in [getattr(container.resources, 'limits', {}), 
-                                getattr(container.resources, 'requests', {})]:
-                    if resources:
-                        for resource_name, value in resources.items():
-                            if any(gpu_type in resource_name.lower() for gpu_type in amd_gpu_resources):
-                                self.logger.info(f"Found AMD GPU resource: {resource_name} = {value} in pod {pod.metadata.name}")
-                                # Add number of GPUs based on resource count
-                                try:
-                                    num_gpus = int(value)
-                                    gpu_ids.extend([str(i) for i in range(len(gpu_ids), len(gpu_ids) + num_gpus)])
-                                except (ValueError, TypeError):
-                                    self.logger.warning(f"Invalid GPU resource value: {value}")
-
-                # Check environment variables
-                if container.env:
-                    gpu_env_vars = [
-                        'ROCR_VISIBLE_DEVICES',
-                        'GPU_DEVICE_ORDINAL',
-                        'HIP_VISIBLE_DEVICES',
-                        'CUDA_VISIBLE_DEVICES'  # Some apps use CUDA env vars with ROCm
-                    ]
-                    
-                    for env in container.env:
-                        if env.name in gpu_env_vars and env.value:
-                            self.logger.info(f"Found GPU environment variable {env.name}={env.value} in pod {pod.metadata.name}")
-                            # Parse comma-separated GPU IDs
-                            try:
-                                gpu_list = [x.strip() for x in env.value.split(',') if x.strip()]
-                                gpu_ids.extend(gpu_list)
-                            except Exception as e:
-                                self.logger.warning(f"Error parsing GPU env var: {e}")
-
-            if gpu_ids:
-                self.logger.info(f"Pod {pod.metadata.name} is using GPUs: {gpu_ids}")
-            
-        except Exception as e:
-            self.logger.error(f"Error parsing pod GPU info: {str(e)}", exc_info=True)
-        
-        return list(set(gpu_ids))
-
-    def _parse_gpu_ids(self, container) -> List[str]:
-        """Parse GPU IDs from container spec."""
-        gpu_ids = []
-        if container.env:
-            for env in container.env:
-                if env.name in ['ROCR_VISIBLE_DEVICES', 'GPU_DEVICE_ORDINAL']:
-                    if env.value:
-                        gpu_ids.extend(env.value.split(','))
-        return gpu_ids
-
-class K8sGPUExporter:
+class KubernetesClient:
+    """Class to handle Kubernetes client initialization and operations"""
     def __init__(self):
         self.logger = logging.getLogger('k8s-gpu-exporter')
-        self.logger.info("Initializing namespace-aware exporter...")
+        self.client = self._initialize_client()
         
-        self.metrics = K8sGPUMetrics()
-        
-        # Get node name with fallbacks
-        self.current_node = self._get_node_name()
-        
-        # Initialize Kubernetes client with fallback options
+    def _initialize_client(self) -> client.CoreV1Api:
+        """Initialize Kubernetes client with fallback options"""
         try:
             config.load_incluster_config()
-            self.logger.info("Successfully loaded in-cluster configuration")
+            self.logger.info("Loaded in-cluster configuration")
         except config.ConfigException:
             try:
-                self.logger.info("Not in cluster, trying kubeconfig...")
                 config.load_kube_config()
-                self.logger.info("Successfully loaded kubeconfig configuration")
+                self.logger.info("Loaded kubeconfig configuration")
             except Exception as e:
                 self.logger.warning(f"Failed to load kubeconfig: {e}")
-                self.logger.info("Falling back to explicit k8s configuration")
+                self._configure_explicit_client()
                 
-                k8s_host = os.getenv('KUBERNETES_HOST', 'https://kubernetes.default.svc')
-                k8s_token = os.getenv('KUBERNETES_TOKEN', '')
-                
-                if not k8s_token and os.path.exists('/var/run/secrets/kubernetes.io/serviceaccount/token'):
-                    with open('/var/run/secrets/kubernetes.io/serviceaccount/token', 'r') as f:
-                        k8s_token = f.read().strip()
-                
-                configuration = client.Configuration()
-                configuration.host = k8s_host
-                configuration.api_key = {"authorization": f"Bearer {k8s_token}"}
-                
-                if os.getenv('KUBERNETES_SKIP_SSL_VERIFY', 'false').lower() == 'true':
-                    configuration.verify_ssl = False
-                
-                client.Configuration.set_default(configuration)
-                self.logger.info(f"Using explicit configuration with host: {k8s_host}")
-        
-        self.k8s_client = client.CoreV1Api()
-        self.gpu_mapper = GPUPodMapper(self.k8s_client, self.current_node)
-        self.logger.info(f"Exporter initialized on node: {self.current_node}")
-        
-        # Print available nodes for debugging
-        try:
-            nodes = self.k8s_client.list_node()
-            self.logger.info("Available nodes in cluster:")
-            for node in nodes.items:
-                self.logger.info(f"- {node.metadata.name}")
-        except Exception as e:
-            self.logger.error(f"Error listing nodes: {e}")
-
-    def _get_node_name(self) -> str:
-        """Get the node name with various fallback methods."""
-        # Try environment variable first
-        node_name = os.getenv('NODE_NAME')
-        if node_name:
-            self.logger.info(f"Using NODE_NAME from environment: {node_name}")
-            return node_name
-            
-        # Try hostname
-        try:
-            hostname = subprocess.check_output(['hostname']).decode().strip()
-            self.logger.info(f"Using hostname: {hostname}")
-            return hostname
-        except:
-            pass
-            
-        # Fallback to uname
-        node_name = os.uname().nodename
-        self.logger.info(f"Using uname nodename: {node_name}")
-        return node_name
+        return client.CoreV1Api()
     
-    def get_gpu_metrics(self) -> Dict[str, Dict[str, float]]:
-        """Get GPU metrics using rocm-smi."""
+    def _configure_explicit_client(self):
+        """Configure client explicitly using environment variables"""
+        k8s_host = os.getenv('KUBERNETES_HOST', 'https://kubernetes.default.svc')
+        k8s_token = self._get_kubernetes_token()
+        
+        configuration = client.Configuration()
+        configuration.host = k8s_host
+        configuration.api_key = {"authorization": f"Bearer {k8s_token}"}
+        
+        if os.getenv('KUBERNETES_SKIP_SSL_VERIFY', 'false').lower() == 'true':
+            configuration.verify_ssl = False
+        
+        client.Configuration.set_default(configuration)
+        self.logger.info(f"Using explicit configuration with host: {k8s_host}")
+    
+    def _get_kubernetes_token(self) -> str:
+        """Get Kubernetes token from environment or file"""
+        token = os.getenv('KUBERNETES_TOKEN', '')
+        if not token and os.path.exists('/var/run/secrets/kubernetes.io/serviceaccount/token'):
+            with open('/var/run/secrets/kubernetes.io/serviceaccount/token', 'r') as f:
+                token = f.read().strip()
+        return token
+
+    def list_pods_on_node(self, node_name: str):
+        """List all pods on a specific node"""
+        return self.client.list_pod_for_all_namespaces(
+            field_selector=f"spec.nodeName={node_name}"
+        )
+
+class GPUMetricsCollector:
+    """Class to collect GPU metrics using rocm-smi"""
+    def __init__(self):
+        self.logger = logging.getLogger('k8s-gpu-exporter')
+
+    def get_metrics(self) -> Dict[str, GPUMetric]:
+        """Collect GPU metrics using rocm-smi commands"""
         try:
-            # Get GPU utilization
-            cmd_util = ["rocm-smi", "--showuse"]
-            result_util = subprocess.run(cmd_util, capture_output=True, text=True)
+            utilization = self._run_rocm_command(["rocm-smi", "--showuse"])
+            memory = self._run_rocm_command(["rocm-smi", "--showmemuse"])
+            power = self._run_rocm_command(["rocm-smi", "--showpower"])
             
-            # Get memory usage
-            cmd_mem = ["rocm-smi", "--showmemuse"]
-            result_mem = subprocess.run(cmd_mem, capture_output=True, text=True)
-            
-            # Get power usage
-            cmd_power = ["rocm-smi", "--showpower"]
-            result_power = subprocess.run(cmd_power, capture_output=True, text=True)
-            
-            # Parse the output
-            metrics = {}
-            
-            def parse_line_value(line: str, indicator: str) -> Optional[float]:
-                try:
-                    if indicator in line:
-                        # Get the part after the indicator
-                        value_part = line.split(indicator)[1].strip()
-                        # Extract just the number
-                        value = float(''.join([c for c in value_part if c.isdigit() or c == '.']))
-                        return value
-                    return None
-                except Exception as e:
-                    self.logger.error(f"Error parsing line '{line}' with indicator '{indicator}': {e}")
-                    return None
-
-            # Parse GPU utilization
-            current_gpu = None
-            for line in result_util.stdout.splitlines():
-                if 'GPU[' in line:
-                    current_gpu = line.split('[')[1].split(']')[0]
-                    if current_gpu not in metrics:
-                        metrics[current_gpu] = {}
-                    
-                    # Try to parse utilization on the same line
-                    value = parse_line_value(line, "GPU use (%)")
-                    if value is not None:
-                        metrics[current_gpu]['utilization'] = value
-                        self.logger.info(f"Set utilization for GPU {current_gpu} to {value}%")
-
-            # Parse memory usage
-            current_gpu = None
-            for line in result_mem.stdout.splitlines():
-                if 'GPU[' in line:
-                    current_gpu = line.split('[')[1].split(']')[0]
-                    if current_gpu not in metrics:
-                        metrics[current_gpu] = {}
-                    
-                    # Try to parse memory on the same line
-                    value = parse_line_value(line, "GPU Memory Allocated (VRAM%)")
-                    if value is not None:
-                        metrics[current_gpu]['memory'] = value
-                        self.logger.info(f"Set memory for GPU {current_gpu} to {value}%")
-
-            # Parse power usage
-            current_gpu = None
-            for line in result_power.stdout.splitlines():
-                if 'GPU[' in line:
-                    current_gpu = line.split('[')[1].split(']')[0]
-                    if current_gpu not in metrics:
-                        metrics[current_gpu] = {}
-                    
-                    # Try to parse power on the same line
-                    value = parse_line_value(line, "Current Socket Graphics Package Power (W)")
-                    if value is not None:
-                        metrics[current_gpu]['power'] = value
-                        self.logger.info(f"Set power for GPU {current_gpu} to {value}W")
-
-            # Log complete metrics
-            self.logger.info("Final collected metrics:")
-            for gpu_id, values in metrics.items():
-                self.logger.info(f"GPU {gpu_id}: {values}")
-
-            return metrics
-                
+            return self._parse_metrics(utilization, memory, power)
         except Exception as e:
-            self.logger.error(f"Error getting GPU metrics: {str(e)}")
-            self.logger.error(traceback.format_exc())
+            self.logger.error(f"Error collecting GPU metrics: {str(e)}")
             return {}
 
-    def update_metrics(self, gpu_metrics: Dict[str, Dict[str, float]]):
-        """Update Prometheus metrics with namespace awareness."""
+    def _run_rocm_command(self, command: List[str]) -> str:
+        """Run a rocm-smi command and return output"""
+        import subprocess
+        result = subprocess.run(command, capture_output=True, text=True)
+        return result.stdout
+
+    def _parse_metrics(self, utilization: str, memory: str, power: str) -> Dict[str, GPUMetric]:
+        """Parse rocm-smi output into structured metrics"""
+        metrics = {}
+        
+        def parse_value(line: str, indicator: str) -> Optional[float]:
+            try:
+                if indicator in line:
+                    value_part = line.split(indicator)[1].strip()
+                    return float(''.join(c for c in value_part if c.isdigit() or c == '.'))
+                return None
+            except Exception:
+                return None
+
+        # Parse each metric type
+        for gpu_line in utilization.splitlines():
+            if 'GPU[' in gpu_line:
+                gpu_id = gpu_line.split('[')[1].split(']')[0]
+                if gpu_id not in metrics:
+                    metrics[gpu_id] = GPUMetric()
+                
+                util_value = parse_value(gpu_line, "GPU use (%)")
+                if util_value is not None:
+                    metrics[gpu_id].utilization = util_value
+
+        for gpu_line in memory.splitlines():
+            if 'GPU[' in gpu_line:
+                gpu_id = gpu_line.split('[')[1].split(']')[0]
+                if gpu_id not in metrics:
+                    metrics[gpu_id] = GPUMetric()
+                
+                mem_value = parse_value(gpu_line, "GPU Memory Allocated (VRAM%)")
+                if mem_value is not None:
+                    metrics[gpu_id].memory = mem_value
+
+        for gpu_line in power.splitlines():
+            if 'GPU[' in gpu_line:
+                gpu_id = gpu_line.split('[')[1].split(']')[0]
+                if gpu_id not in metrics:
+                    metrics[gpu_id] = GPUMetric()
+                
+                power_value = parse_value(gpu_line, "Current Socket Graphics Package Power (W)")
+                if power_value is not None:
+                    metrics[gpu_id].power = power_value
+
+        return metrics
+
+class NodeManager:
+    """Class to handle node-related operations"""
+    def __init__(self):
+        self.logger = logging.getLogger('k8s-gpu-exporter')
+        self.node_name = self._get_node_name()
+
+    def _get_node_name(self) -> str:
+        """Get node name with fallback methods"""
+        if node_name := os.getenv('NODE_NAME'):
+            return node_name
+            
         try:
-            gpu_mappings = self.gpu_mapper.get_pod_gpu_mappings()
-            
-            for gpu_id, metrics in gpu_metrics.items():
-                namespace = 'unmapped'
-                pod_name = 'unmapped'
-                
-                if gpu_id in gpu_mappings:
-                    namespace = gpu_mappings[gpu_id]['namespace']
-                    pod_name = gpu_mappings[gpu_id]['pod']
-                
-                # Log each metric update
-                if 'utilization' in metrics:
-                    self.logger.info(f"Setting utilization for GPU {gpu_id}: {metrics['utilization']}%")
-                    self.metrics.gpu_utilization.labels(
-                        node=self.current_node,
-                        gpu_id=gpu_id,
-                        namespace=namespace,
-                        pod=pod_name
-                    ).set(metrics['utilization'])
-                
-                if 'memory' in metrics:
-                    self.logger.info(f"Setting memory for GPU {gpu_id}: {metrics['memory']}%")
-                    self.metrics.gpu_memory.labels(
-                        node=self.current_node,
-                        gpu_id=gpu_id,
-                        namespace=namespace,
-                        pod=pod_name
-                    ).set(metrics['memory'])
-                
-                if 'power' in metrics:
-                    self.logger.info(f"Setting power for GPU {gpu_id}: {metrics['power']}W")
-                    self.metrics.gpu_power.labels(
-                        node=self.current_node,
-                        gpu_id=gpu_id,
-                        namespace=namespace,
-                        pod=pod_name
-                    ).set(metrics['power'])
-            
-            # Update namespace-level metrics
-            namespace_metrics = self._get_namespace_metrics(gpu_metrics, gpu_mappings)
-            for namespace, metrics in namespace_metrics.items():
-                self.metrics.namespace_gpu_utilization.labels(
-                    namespace=namespace
-                ).set(metrics['utilization'])
-                
-                self.metrics.namespace_gpu_memory.labels(
-                    namespace=namespace
-                ).set(metrics['memory'])
-                
-                self.metrics.namespace_gpu_count.labels(
-                    namespace=namespace
-                ).set(metrics['gpu_count'])
-            
-        except Exception as e:
-            self.logger.error(f"Error updating metrics: {e}")
-            self.metrics.collection_errors.labels(type='update_metrics').inc()
+            import subprocess
+            return subprocess.check_output(['hostname']).decode().strip()
+        except:
+            return os.uname().nodename
 
-    def _get_namespace_metrics(self, gpu_metrics: Dict[str, Dict[str, float]], 
-                                gpu_mappings: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, float]]:
-        """Aggregate metrics per namespace."""
-        namespace_metrics = {}
-        
-        for gpu_id, metrics in gpu_metrics.items():
-            if gpu_id in gpu_mappings:
-                namespace = gpu_mappings[gpu_id]['namespace']
-                
-                if namespace not in namespace_metrics:
-                    namespace_metrics[namespace] = {
-                        'utilization': 0.0,
-                        'memory': 0.0,
-                        'gpu_count': 0
-                    }
-                
-                namespace_metrics[namespace]['utilization'] += metrics.get('utilization', 0)
-                namespace_metrics[namespace]['memory'] += metrics.get('memory', 0)
-                namespace_metrics[namespace]['gpu_count'] += 1
-        
-        return namespace_metrics
+class GPUExporter:
+    """Main exporter class"""
+    def __init__(self):
+        self.logger = logging.getLogger('k8s-gpu-exporter')
+        self.node_manager = NodeManager()
+        self.k8s_client = KubernetesClient()
+        self.metrics = PrometheusMetrics()
+        self.collector = GPUMetricsCollector()
 
-    def collect_metrics(self):
-        """Collect and update GPU metrics."""
-        try:
-            self.logger.info("Starting metrics collection...")
-            gpu_metrics = self.get_gpu_metrics()
-            if gpu_metrics:
-                self.update_metrics(gpu_metrics)
-                self.logger.info("Metrics collection completed successfully")
-            else:
-                self.logger.error("Failed to collect GPU metrics")
-        except Exception as e:
-            self.logger.error(f"Error in collect_metrics: {e}")
-            self.metrics.collection_errors.labels(type='collect_metrics').inc()
-
-def main():
-    try:
-        # Configure logging
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(name)s - [%(levelname)s] - %(message)s'
-        )
-        logger = logging.getLogger('k8s-gpu-exporter')
-
-        # Get configuration from environment variables
-        port = int(os.environ.get('EXPORTER_PORT', 9400))
-        collection_interval = int(os.environ.get('COLLECTION_INTERVAL', 300))
-        
-        # Get node name from environment or prompt user
-        node_name = os.environ.get('NODE_NAME')
-        if not node_name:
-            # List available nodes
-            config.load_kube_config()
-            k8s_client = client.CoreV1Api()
-            nodes = k8s_client.list_node()
-            
-            logger.info("\nAvailable nodes in cluster:")
-            for node in nodes.items:
-                logger.info(f"- {node.metadata.name}")
-            
-            # Prompt for node name
-            logger.info("\nPlease set the NODE_NAME environment variable to one of the above nodes.")
-            logger.info("Example: export NODE_NAME=node1")
-            sys.exit(1)
-        
-        # Additional environment variables for k8s configuration
-        os.environ.setdefault('KUBERNETES_HOST', 'https://kubernetes.default.svc')
-        os.environ.setdefault('KUBERNETES_SKIP_SSL_VERIFY', 'false')
-
-        logger.info(f"Starting namespace-aware GPU exporter on port {port}")
-        logger.info(f"Collection interval: {collection_interval} seconds")
-        logger.info(f"Using node name: {node_name}")
-        
+    def start(self, port: int, interval: int):
+        """Start the exporter"""
         start_http_server(port)
-        exporter = K8sGPUExporter()
+        self.logger.info(f"Started exporter on port {port}")
         
         while True:
             try:
-                exporter.collect_metrics()
-                time.sleep(collection_interval)
+                self._collect_and_update_metrics()
+                time.sleep(interval)
             except Exception as e:
-                logger.error(f"Error in collection loop: {e}")
-                time.sleep(collection_interval)
-                
+                self.logger.error(f"Error in collection loop: {e}")
+                self.metrics.collection_errors.labels(type='collection_loop').inc()
+                time.sleep(interval)
+
+    def _collect_and_update_metrics(self):
+        """Collect and update metrics"""
+        gpu_metrics = self.collector.get_metrics()
+        if not gpu_metrics:
+            return
+
+        self._update_prometheus_metrics(gpu_metrics)
+
+    def _update_prometheus_metrics(self, gpu_metrics: Dict[str, GPUMetric]):
+        """Update Prometheus metrics"""
+        try:
+            pods = self.k8s_client.list_pods_on_node(self.node_manager.node_name)
+            namespace_metrics = {}
+
+            for gpu_id, metric in gpu_metrics.items():
+                # Update GPU-level metrics
+                self.metrics.gpu_utilization.labels(
+                    node=self.node_manager.node_name,
+                    gpu_id=gpu_id,
+                    namespace='unmapped',
+                    pod='unmapped'
+                ).set(metric.utilization)
+
+                self.metrics.gpu_memory.labels(
+                    node=self.node_manager.node_name,
+                    gpu_id=gpu_id,
+                    namespace='unmapped',
+                    pod='unmapped'
+                ).set(metric.memory)
+
+                self.metrics.gpu_power.labels(
+                    node=self.node_manager.node_name,
+                    gpu_id=gpu_id,
+                    namespace='unmapped',
+                    pod='unmapped'
+                ).set(metric.power)
+
+            # Update namespace-level metrics
+            for namespace, metrics in namespace_metrics.items():
+                self.metrics.namespace_gpu_utilization.labels(namespace=namespace).set(metrics.utilization)
+                self.metrics.namespace_gpu_memory.labels(namespace=namespace).set(metrics.memory)
+                self.metrics.namespace_gpu_count.labels(namespace=namespace).set(metrics.gpu_count)
+
+        except Exception as e:
+            self.logger.error(f"Error updating Prometheus metrics: {e}")
+            self.metrics.collection_errors.labels(type='update_metrics').inc()
+
+def main():
+    """Main entry point"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - [%(levelname)s] - %(message)s'
+    )
+    
+    port = int(os.environ.get('EXPORTER_PORT', 9400))
+    interval = int(os.environ.get('COLLECTION_INTERVAL', 300))
+    
+    try:
+        exporter = GPUExporter()
+        exporter.start(port, interval)
     except Exception as e:
-        logger.error(f"Fatal error in main: {e}")
-        logger.error(traceback.format_exc())
+        logging.error(f"Fatal error: {e}")
         sys.exit(1)
 
-def test_parsing():
-    """Test function to verify parsing logic."""
-    test_util = """============================ ROCm System Management Interface ============================
-=================================== % time GPU is busy ===================================
-GPU[0]          : GPU use (%): 0
-GPU[0]          : GFX Activity: 156143431
-GPU[1]          : GPU use (%): 36
-GPU[1]          : GFX Activity: 183247150"""
-
-    test_mem = """============================ ROCm System Management Interface ============================
-=================================== Current Memory Use ===================================
-GPU[0]          : GPU Memory Allocated (VRAM%): 70
-GPU[0]          : Memory Activity: 3418685
-GPU[1]          : GPU Memory Allocated (VRAM%): 82"""
-
-    test_power = """============================ ROCm System Management Interface ============================
-=================================== Power Consumption ====================================
-GPU[0]          : Current Socket Graphics Package Power (W): 147.0
-GPU[1]          : Current Socket Graphics Package Power (W): 141.0"""
-
-    logger = logging.getLogger('test')
-    logger.setLevel(logging.INFO)
-    handler = logging.StreamHandler()
-    handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-    logger.addHandler(handler)
-
-    class TestExporter:
-        def __init__(self):
-            self.logger = logger
-
-    exporter = TestExporter()
-    old_stdout = sys.stdout
-    sys.stdout = open(os.devnull, 'w')  # Suppress print statements
-
-    try:
-        # Mock the subprocess.run results
-        class MockResult:
-            def __init__(self, output):
-                self.stdout = output
-                self.returncode = 0
-
-        with patch('subprocess.run') as mock_run:
-            mock_run.side_effect = [
-                MockResult(test_util),
-                MockResult(test_mem),
-                MockResult(test_power)
-            ]
-            
-            metrics = exporter.get_gpu_metrics()
-            print("\nParsed Metrics:")
-            print(json.dumps(metrics, indent=2))
-            
-    finally:
-        sys.stdout = old_stdout
-
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--test":
-        test_parsing()
-    else:
-        main()
+    main()
