@@ -1,0 +1,47 @@
+# TODO: rename all new files and archive the old code, using the key new in all new code deployed
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: amd-device-metrics-exporter
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: gpu-metrics
+  template:
+    metadata:
+      labels:
+        app: gpu-metrics
+        cluster-type: ${CLUSTER_TYPE}  # OCI or BAREMETAL
+    spec:
+      nodeSelector:
+        hardware-type: AMGPU
+      containers:
+      - name: device-metrics-exporter
+        image: rocm/device-metrics-exporter:v1.0.0
+        ports:
+        - containerPort: 5000
+        securityContext:
+          privileged: true  # Required for GPU access
+        volumeMounts:
+        - name: device-dri
+          mountPath: /dev/dri
+        - name: device-kfd
+          mountPath: /dev/kfd
+      - name: pushgateway-adapter
+        image: prom/pushgateway:latest
+        args:
+        - --web.listen-address=:9091
+        - --persistence.interval=5m
+        volumeMounts:
+        - name: pushgateway-storage
+          mountPath: /persistence
+      volumes:
+      - name: device-dri
+        hostPath:
+          path: /dev/dri
+      - name: device-kfd
+        hostPath:
+          path: /dev/kfd
+      - name: pushgateway-storage
+        emptyDir: {}
