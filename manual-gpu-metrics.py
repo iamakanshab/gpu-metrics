@@ -6,7 +6,7 @@ import time
 import os
 
 def collect_metrics():
-    output_dir = os.path.expanduser("~/gpu_metrics")
+    output_dir = os.path.expanduser("~/manual_metrics")
     os.makedirs(output_dir, exist_ok=True)
     
     while True:
