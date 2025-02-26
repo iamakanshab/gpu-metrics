@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 
 class QueueTimeStatsCollector:
-    def __init__(self, duration_mins=5, interval_secs=60, output_dir=None):
+    def __init__(self, duration_mins=5, interval_secs=60, output_dir=None, exclude_namespaces=None):
         """
         Initialize the collector
         
@@ -17,9 +17,11 @@ class QueueTimeStatsCollector:
             duration_mins: Collection duration in minutes (default: 5)
             interval_secs: Interval between collections in seconds (default: 60)
             output_dir: Directory to store results (default: auto-generated)
+            exclude_namespaces: List of namespaces to exclude (default: ['kube-system'])
         """
         self.duration_mins = duration_mins
         self.interval_secs = interval_secs
+        self.exclude_namespaces = exclude_namespaces or ['kube-system']
         
         # Create timestamp for output directory
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -32,10 +34,11 @@ class QueueTimeStatsCollector:
         self.all_data = pd.DataFrame(columns=['Timestamp', 'Namespace', 'Pod', 'QueueTime'])
         
         print(f"Starting queue time statistics collection for {duration_mins} minutes.")
+        print(f"Excluding namespaces: {', '.join(self.exclude_namespaces)}")
         print(f"Data will be saved to {self.output_dir}/")
     
     def collect_queue_times(self):
-        """Run kubectl command and collect queue times for all namespaces"""
+        """Run kubectl command and collect queue times for all namespaces (except excluded ones)"""
         try:
             # Run kubectl command to get all pods across all namespaces
             result = subprocess.run(
@@ -51,8 +54,13 @@ class QueueTimeStatsCollector:
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
             for pod in pods_data['items']:
+                namespace = pod['metadata']['namespace']
+                
+                # Skip excluded namespaces
+                if namespace in self.exclude_namespaces:
+                    continue
+                    
                 if pod.get('status', {}).get('startTime'):
-                    namespace = pod['metadata']['namespace']
                     pod_name = pod['metadata']['name']
                     
                     # Parse timestamps
@@ -62,11 +70,18 @@ class QueueTimeStatsCollector:
                     # Calculate queue time in seconds
                     queue_time = (start_time - created_time).total_seconds()
                     
+                    # Skip unreasonable queue times (more than 30 days)
+                    if queue_time > 30 * 24 * 60 * 60:
+                        print(f"WARNING: Skipping pod {namespace}/{pod_name} with unreasonable queue time: {queue_time:.2f} seconds")
+                        continue
+                    
                     queue_times.append({
                         'Timestamp': timestamp,
                         'Namespace': namespace,
                         'Pod': pod_name,
-                        'QueueTime': queue_time
+                        'QueueTime': queue_time,
+                        'CreationTime': pod['metadata']['creationTimestamp'],
+                        'StartTime': pod['status']['startTime']
                     })
             
             return pd.DataFrame(queue_times)
@@ -164,7 +179,7 @@ class QueueTimeStatsCollector:
         # Identify top pods with longest queue times
         print("\n=== TOP 10 PODS WITH LONGEST QUEUE TIMES ===")
         top_pods = self.all_data.sort_values('QueueTime', ascending=False).drop_duplicates(['Namespace', 'Pod']).head(10)
-        top_pods_display = top_pods[['Namespace', 'Pod', 'QueueTime']].copy()
+        top_pods_display = top_pods[['Namespace', 'Pod', 'QueueTime', 'CreationTime', 'StartTime']].copy()
         top_pods_display['QueueTime'] = top_pods_display['QueueTime'].round(2)
         print(top_pods_display.to_string(index=False))
         top_pods.to_csv(os.path.join(self.output_dir, "top_pods.csv"), index=False)
@@ -175,7 +190,8 @@ class QueueTimeStatsCollector:
             f.write("=== KUBERNETES POD QUEUE TIME STATISTICS ===\n\n")
             f.write(f"Report generated: {datetime.datetime.now()}\n")
             f.write(f"Collection period: {self.duration_mins} minutes\n")
-            f.write(f"Collection interval: {self.interval_secs} seconds\n\n")
+            f.write(f"Collection interval: {self.interval_secs} seconds\n")
+            f.write(f"Excluded namespaces: {', '.join(self.exclude_namespaces)}\n\n")
             
             f.write("=== OVERALL STATISTICS ===\n")
             f.write(f"Total unique pods: {total_pods}\n")
@@ -189,9 +205,9 @@ class QueueTimeStatsCollector:
                 f.write(f"{row['Namespace']}, {row['PodCount']}, {row['AvgQueueTime']:.2f}, {row['MaxQueueTime']:.2f}, {row['MinQueueTime']:.2f}, {row['StdQueueTime']:.2f}\n")
             
             f.write("\n=== TOP 10 PODS WITH LONGEST QUEUE TIMES ===\n")
-            f.write("Namespace, Pod, QueueTime\n")
+            f.write("Namespace, Pod, QueueTime, CreationTime, StartTime\n")
             for _, row in top_pods.iterrows():
-                f.write(f"{row['Namespace']}, {row['Pod']}, {row['QueueTime']:.2f}\n")
+                f.write(f"{row['Namespace']}, {row['Pod']}, {row['QueueTime']:.2f}, {row['CreationTime']}, {row['StartTime']}\n")
         
         print(f"\nDetailed statistics report saved to: {report_file}")
     
