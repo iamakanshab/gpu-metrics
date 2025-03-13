@@ -42,7 +42,7 @@ class QueueTimeStatsCollector:
         
         # Initialize DataFrame to store all collected data
         self.all_data = pd.DataFrame(columns=['Timestamp', 'Namespace', 'Pod', 'QueueTime', 'QueueTimeFormatted', 
-                                              'Days', 'Hours', 'Minutes', 'Seconds'])
+                                             'Days', 'Hours', 'Minutes', 'Seconds'])
         
         print(f"Starting queue time statistics collection for {duration_mins} minutes.")
         print(f"Excluding namespaces: {', '.join(self.exclude_namespaces)}")
@@ -252,41 +252,118 @@ class QueueTimeStatsCollector:
         # Save top pods data
         top_pods.to_csv(os.path.join(self.output_dir, "top_pods.csv"), index=False)
         top_pods.to_excel(os.path.join(self.output_dir, "top_pods.xlsx"), index=False, engine='openpyxl')
-        
-        # Generate statistics report file
-        report_file = os.path.join(self.output_dir, "queue_stats_report.txt")
-        with open(report_file, 'w') as f:
-            f.write("=== KUBERNETES POD QUEUE TIME STATISTICS ===\n\n")
-            f.write(f"Report generated: {datetime.datetime.now()}\n")
-            f.write(f"Collection period: {self.duration_mins} minutes\n")
-            f.write(f"Collection interval: {self.interval_secs} seconds\n")
-            f.write(f"Excluded namespaces: {', '.join(self.exclude_namespaces)}\n\n")
-            
-            f.write("=== OVERALL STATISTICS ===\n")
-            f.write(f"Total unique pods: {total_pods}\n")
-            f.write(f"Total namespaces: {total_namespaces}\n")
-            f.write(f"Overall average queue time: {avg_formatted} ({overall_avg:.2f} seconds)\n")
-            f.write(f"Overall maximum queue time: {max_formatted} ({overall_max:.2f} seconds) in {max_ns}/{max_pod}\n\n")
-            
-            f.write("=== STATISTICS BY NAMESPACE ===\n")
-            f.write("Namespace, PodCount, AvgQueueTime, AvgQueueTimeFormatted, MaxQueueTime, MaxQueueTimeFormatted, MinQueueTime, MinQueueTimeFormatted\n")
-            for _, row in ns_stats.iterrows():
-                f.write(f"{row['Namespace']}, {row['PodCount']}, {row['AvgQueueTime']:.2f}, {row['AvgQueueTimeFormatted']}, ")
-                f.write(f"{row['MaxQueueTime']:.2f}, {row['MaxQueueTimeFormatted']}, {row['MinQueueTime']:.2f}, {row['MinQueueTimeFormatted']}\n")
-            
-            f.write("\n=== TOP 10 PODS WITH LONGEST QUEUE TIMES ===\n")
-            f.write("Namespace, Pod, QueueTime, QueueTimeFormatted, CreationTime, StartTime\n")
-            for _, row in top_pods.iterrows():
-                f.write(f"{row['Namespace']}, {row['Pod']}, {row['QueueTime']:.2f}, {row['QueueTimeFormatted']}, ")
-                f.write(f"{row['CreationTime']}, {row['StartTime']}\n")
-        
-        print(f"\nDetailed statistics report saved to: {report_file}")
-        print(f"Excel reports saved to: {self.output_dir}/*.xlsx")
     
+    def generate_summary_report(self):
+        """
+        Generate a standalone summary Excel report based on the final printed statistics
+        """
+        # File path for the Excel report
+        summary_file = os.path.join(self.output_dir, "queue_time_summary.xlsx")
+        
+        # Create a Pandas Excel writer using openpyxl as the engine
+        with pd.ExcelWriter(summary_file, engine='openpyxl') as writer:
+            # 1. Overall Statistics
+            # Get the calculated values from instance variables
+            total_pods = len(self.all_data['Pod'].unique())
+            total_namespaces = len(self.all_data['Namespace'].unique())
+            overall_avg = self.all_data['QueueTime'].mean()
+            overall_max = self.all_data['QueueTime'].max()
+            max_ns = self.all_data.loc[self.all_data['QueueTime'].idxmax(), 'Namespace'] if not self.all_data.empty else "N/A"
+            max_pod = self.all_data.loc[self.all_data['QueueTime'].idxmax(), 'Pod'] if not self.all_data.empty else "N/A"
+            
+            # Format times for display
+            avg_formatted = self.format_time_components(overall_avg)['Formatted']
+            max_formatted = self.format_time_components(overall_max)['Formatted']
+            
+            overall_stats = pd.DataFrame([
+                ["=== OVERALL QUEUE TIME STATISTICS ===", ""],
+                ["Total unique pods", total_pods],
+                ["Total namespaces", total_namespaces],
+                ["Overall average queue time", f"{avg_formatted} ({overall_avg:.2f} seconds)"],
+                ["Overall maximum queue time", f"{max_formatted} ({overall_max:.2f} seconds) in {max_ns}/{max_pod}"],
+            ])
+            overall_stats.to_excel(writer, sheet_name='Overall Statistics', index=False, header=False)
+            
+            # Auto-adjust column width for the overall stats sheet
+            worksheet = writer.sheets['Overall Statistics']
+            for idx, col in enumerate(overall_stats.columns):
+                max_len = max(overall_stats[col].astype(str).map(len).max(), len(str(col)))
+                worksheet.column_dimensions[chr(65 + idx)].width = max_len + 5
+            
+            # 2. Namespace Statistics
+            # Get namespace stats from the grouped data
+            ns_stats = self.all_data.groupby('Namespace').agg(
+                PodCount=('Pod', 'nunique'),
+                AvgQueueTime=('QueueTime', 'mean'),
+                MaxQueueTime=('QueueTime', 'max'),
+                MinQueueTime=('QueueTime', 'min')
+            ).reset_index()
+            
+            # Add formatted time columns
+            ns_stats['AvgQueueTimeFormatted'] = ns_stats['AvgQueueTime'].apply(
+                lambda x: self.format_time_components(x)['Formatted'])
+            ns_stats['MaxQueueTimeFormatted'] = ns_stats['MaxQueueTime'].apply(
+                lambda x: self.format_time_components(x)['Formatted'])
+            ns_stats['MinQueueTimeFormatted'] = ns_stats['MinQueueTime'].apply(
+                lambda x: self.format_time_components(x)['Formatted'])
+            
+            # Sort by average queue time (descending)
+            ns_stats = ns_stats.sort_values('AvgQueueTime', ascending=False)
+            
+            # Prepare the data for Excel - use only the formatted columns for display
+            ns_display = ns_stats[['Namespace', 'PodCount', 'AvgQueueTimeFormatted', 
+                                'MaxQueueTimeFormatted', 'MinQueueTimeFormatted']].copy()
+            
+            # Rename the columns to match the display format
+            ns_display.columns = ['Namespace', 'PodCount', 'AvgQueueTime', 'MaxQueueTime', 'MinQueueTime']
+            
+            # Add a header row with the section title
+            header_df = pd.DataFrame([["=== QUEUE TIME STATISTICS BY NAMESPACE ==="]], columns=["Namespace"])
+            # Concatenate the header with the data
+            empty_cols = {col: [""] for col in ns_display.columns[1:]}
+            header_df = pd.concat([header_df, pd.DataFrame(empty_cols)], axis=1)
+            ns_display = pd.concat([header_df, ns_display], ignore_index=True)
+            
+            ns_display.to_excel(writer, sheet_name='Namespace Statistics', index=False)
+            
+            # Auto-adjust column width for namespace stats
+            worksheet = writer.sheets['Namespace Statistics']
+            for idx, col in enumerate(ns_display.columns):
+                max_len = max(ns_display[col].astype(str).map(len).max(), len(str(col)))
+                worksheet.column_dimensions[chr(65 + idx)].width = max_len + 2
+            
+            # 3. Top 10 Pods
+            # Get the top 10 pods with longest queue times
+            top_pods = self.all_data.sort_values('QueueTime', ascending=False).drop_duplicates(['Namespace', 'Pod']).head(10)
+            
+            # Create display dataframe
+            top_pods_display = top_pods[['Namespace', 'Pod', 'QueueTimeFormatted', 'CreationTime', 'StartTime']].copy()
+            top_pods_display.columns = ['Namespace', 'Pod', 'MaxQueueTime', 'CreationTime', 'StartTime']
+            
+            # Add a header row with the section title
+            header_df = pd.DataFrame([["=== TOP 10 PODS WITH LONGEST QUEUE TIMES ==="]], columns=["Namespace"])
+            # Concatenate the header with the data
+            empty_cols = {col: [""] for col in top_pods_display.columns[1:]}
+            header_df = pd.concat([header_df, pd.DataFrame(empty_cols)], axis=1)
+            top_pods_display = pd.concat([header_df, top_pods_display], ignore_index=True)
+            
+            top_pods_display.to_excel(writer, sheet_name='Top 10 Pods', index=False)
+            
+            # Auto-adjust column width for top pods
+            worksheet = writer.sheets['Top 10 Pods']
+            for idx, col in enumerate(top_pods_display.columns):
+                max_len = max(top_pods_display[col].astype(str).map(len).max(), len(str(col)))
+                worksheet.column_dimensions[chr(65 + idx)].width = max_len + 2
+        
+        print(f"\nSummary report generated: {summary_file}")
+        return summary_file
+
     def run(self):
         """Run the entire collection and analysis process"""
         self.run_collection()
         self.generate_statistics()
+        # Generate the summary report
+        self.generate_summary_report()
         print("\nCollection and analysis complete!")
         print(f"Excel files are available in: {self.output_dir}/")
 
