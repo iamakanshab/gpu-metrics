@@ -14,7 +14,7 @@ class QueueTimeCollector:
         self.exclude_namespaces = exclude_namespaces or ['kube-system']
         
         # Hardcode the kubeconfig path
-        self.kubeconfig = "/root/.kube/config"
+        self.kubeconfig = "/home/akbansal/.kube/config"
         
         # Set up storage directory with timestamp
         timestamp = datetime.datetime.now().strftime("%Y%m%d")

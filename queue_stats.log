@@ -1,0 +1,2 @@
+nohup: ignoring input
+nohup: failed to run command './queue_stats_enhanced.py': Permission denied

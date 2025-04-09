@@ -25,7 +25,7 @@ class QueueTimeStatsCollector:
         self.exclude_namespaces = exclude_namespaces or ['kube-system']
         
         # Hardcode the kubeconfig path to /root/.kube/config
-        self.kubeconfig = "/root/.kube/config"
+        self.kubeconfig = "/home/akbansal/.kube/config"
         
         # Verify kubeconfig exists
         if not os.path.exists(self.kubeconfig):
