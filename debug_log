@@ -1,0 +1,12 @@
+kubectl logs -n monitoring $(kubectl get pod -n monitoring -l app=queue-time-exporter -o name) --tail=50
+2025-04-27 15:19:42,156 - queue-time-exporter - INFO - Queue time exporter started
+2025-04-27 15:19:42,156 - queue-time-exporter - INFO - Starting pod watch stream
+2025-04-27 15:19:42,318 - urllib3.connectionpool - WARNING - Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ConnectionResetError(104, 'Connection reset by peer')': /api/v1/pods?timeoutSeconds=300&watch=True
+2025-04-27 15:19:43,151 - queue-time-exporter - INFO - Pod monitoring/queue-time-exporter-78b954878-wvd2p queue time: 1.0s
+2025-04-27 15:19:43,154 - queue-time-exporter - INFO - Pod health-checker/health-checker-95cs7 queue time: 0.0s
+2025-04-27 15:20:00,851 - queue-time-exporter - INFO - Pod health-checker/health-checker-95cs7 queue time: 0.0s
+2025-04-27 15:20:07,501 - queue-time-exporter - INFO - Pod monitoring/queue-time-exporter-78b954878-tmrwz queue time: 0.0s
+2025-04-27 15:20:09,723 - queue-time-exporter - INFO - Pod buildkite/buildkite-cleanup-agents-29096120-hm5sf queue time: 0.0s
+2025-04-27 15:20:12,746 - queue-time-exporter - INFO - Pod buildkite/buildkite-cleanup-agents-29096120-hm5sf queue time: 0.0s
+2025-04-27 15:20:13,667 - queue-time-exporter - INFO - Pod health-checker/health-checker-95cs7 queue time: 0.0s
+2025-04-27 15:20:13,964 - queue-time-exporter - INFO - Pod buildkite/buildkite-cleanup-agents-29096120-hm5sf queue time: 0.0s
